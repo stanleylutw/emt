@@ -1,0 +1,1695 @@
+const SUPABASE_URL = "https://iysshfoqqzdwkfeqnsda.supabase.co";
+const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_9Tts206qgN5G3toPwcYv2g_V1Ct-W44";
+const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
+
+const state = {
+  user: null,
+  session: null,
+  rows: [],
+  busy: false,
+  modeOverride: null,
+  editRowId: null,
+  editRowIsOpen: false,
+  eventSheetMode: "final",
+  summaryRange: "today",
+  summaryTouchStartX: null,
+  processingPendingQueue: false,
+  pendingQueueTimer: null,
+  profile: {
+    displayName: "",
+    unit: "",
+    title: "",
+    phone: "",
+    avatarDataUrl: ""
+  },
+  profileDraftAvatarDataUrl: ""
+};
+
+const el = {
+  profileBtn: document.getElementById("profileBtn"),
+  profileAvatar: document.getElementById("profileAvatar"),
+  brandMeta: document.getElementById("brandMeta"),
+  pendingStatus: document.getElementById("pendingStatus"),
+  authCard: document.getElementById("authCard"),
+  workCard: document.getElementById("workCard"),
+  actionBar: document.getElementById("actionBar"),
+  googleLoginBtn: document.getElementById("googleLoginBtn"),
+  logoutBtn: document.getElementById("logoutBtn"),
+
+  sumDutyHours: document.getElementById("sumDutyHours"),
+  sumEventCount: document.getElementById("sumEventCount"),
+  sumTransported: document.getElementById("sumTransported"),
+  summaryCard: document.getElementById("summaryCard"),
+  summaryTabs: document.getElementById("summaryTabs"),
+
+  startShiftBtn: document.getElementById("startShiftBtn"),
+  todayEmpty: document.getElementById("todayEmpty"),
+  sessionForm: document.getElementById("sessionForm"),
+  displayName: document.getElementById("displayName"),
+  startTime: document.getElementById("startTime"),
+  fillStartNowBtn: document.getElementById("fillStartNowBtn"),
+  taskType: document.getElementById("taskType"),
+  taskTypeCustomWrap: document.getElementById("taskTypeCustomWrap"),
+  taskTypeCustom: document.getElementById("taskTypeCustom"),
+  deleteTodayBtn: document.getElementById("deleteTodayBtn"),
+  sessionStatus: document.getElementById("sessionStatus"),
+
+  timelineList: document.getElementById("timelineList"),
+  startEventBtn: document.getElementById("startEventBtn"),
+  finishEventBtn: document.getElementById("finishEventBtn"),
+  checkoutBtn: document.getElementById("checkoutBtn"),
+
+  eventSheet: document.getElementById("eventSheet"),
+  eventSheetTitle: document.getElementById("eventSheetTitle"),
+  eventForm: document.getElementById("eventForm"),
+  saveDraftBtn: document.getElementById("saveDraftBtn"),
+  confirmFinishBtn: document.getElementById("confirmFinishBtn"),
+  eventFinishTime: document.getElementById("eventFinishTime"),
+  fillEventNowBtn: document.getElementById("fillEventNowBtn"),
+  cancelEventBtn: document.getElementById("cancelEventBtn"),
+  hospital: document.getElementById("hospital"),
+  patientCount: document.getElementById("patientCount"),
+  caseType: document.getElementById("caseType"),
+  chiefComplaint: document.getElementById("chiefComplaint"),
+  bp: document.getElementById("bp"),
+  spo2: document.getElementById("spo2"),
+  equipmentItems: Array.from(document.querySelectorAll("input[name='equipmentItem']")),
+  memo: document.getElementById("memo"),
+  eventStatus: document.getElementById("eventStatus"),
+
+  profileSheet: document.getElementById("profileSheet"),
+  profileForm: document.getElementById("profileForm"),
+  saveProfileBtn: document.getElementById("saveProfileBtn"),
+  profileEmail: document.getElementById("profileEmail"),
+  profileDisplayName: document.getElementById("profileDisplayName"),
+  profileUnit: document.getElementById("profileUnit"),
+  profileTitle: document.getElementById("profileTitle"),
+  profilePhone: document.getElementById("profilePhone"),
+  profileAvatarFile: document.getElementById("profileAvatarFile"),
+  profileAvatarPreview: document.getElementById("profileAvatarPreview"),
+  cancelProfileBtn: document.getElementById("cancelProfileBtn"),
+  copyDebugLogBtn: document.getElementById("copyDebugLogBtn"),
+  clearDebugLogBtn: document.getElementById("clearDebugLogBtn"),
+  profileStatus: document.getElementById("profileStatus"),
+  syncIndicator: document.getElementById("syncIndicator"),
+  syncText: document.getElementById("syncText")
+};
+
+const DEFAULT_AVATAR = "assets/star-of-life.png";
+const SUMMARY_RANGE_ORDER = ["today", "month", "year", "all"];
+const DB_TIMEOUT_MS = 12000;
+const DB_MAX_ATTEMPTS = 3;
+const DB_RETRY_BASE_MS = 700;
+const DB_READ_TIMEOUT_MS = 8000;
+const DB_READ_ATTEMPTS = 2;
+const DB_WRITE_TIMEOUT_MS = 8000;
+const DB_WRITE_ATTEMPTS = 2;
+const DRAFT_WRITE_TIMEOUT_MS = 5000;
+const DRAFT_WRITE_ATTEMPTS = 1;
+const PENDING_SYNC_TIMEOUT_MS = 15000;
+const PENDING_SYNC_ATTEMPTS = 2;
+const DEBUG_LOG_KEY = "emt_debug_logs_v1";
+const DEBUG_LOG_MAX = 300;
+const PENDING_SYNC_KEY = "emt_pending_sync_v1";
+const PENDING_SYNC_MAX = 200;
+
+const pad2 = (n) => String(n).padStart(2, "0");
+
+const toInput24h = (date = new Date()) => {
+  const y = date.getFullYear();
+  const m = pad2(date.getMonth() + 1);
+  const d = pad2(date.getDate());
+  const hh = pad2(date.getHours());
+  const mm = pad2(date.getMinutes());
+  return `${y}-${m}-${d} ${hh}:${mm}`;
+};
+
+const parseInput24h = (text) => {
+  const v = (text || "").trim();
+  const m = v.match(/^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2})$/);
+  if (!m) return null;
+  const year = Number(m[1]);
+  const month = Number(m[2]);
+  const day = Number(m[3]);
+  const hour = Number(m[4]);
+  const minute = Number(m[5]);
+  if (month < 1 || month > 12) return null;
+  if (day < 1 || day > 31) return null;
+  if (hour < 0 || hour > 23) return null;
+  if (minute < 0 || minute > 59) return null;
+  const dt = new Date(year, month - 1, day, hour, minute, 0, 0);
+  if (
+    dt.getFullYear() !== year ||
+    dt.getMonth() !== month - 1 ||
+    dt.getDate() !== day ||
+    dt.getHours() !== hour ||
+    dt.getMinutes() !== minute
+  ) {
+    return null;
+  }
+  return dt;
+};
+
+const formatDateTime = (iso) => {
+  if (!iso) return "-";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleString("zh-TW", {
+    hour12: false,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+};
+
+const formatHm = (iso) => {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "--:--";
+  return d.toLocaleTimeString("zh-TW", { hour12: false, hour: "2-digit", minute: "2-digit" });
+};
+
+const dayBounds = () => {
+  const n = new Date();
+  const s = new Date(n.getFullYear(), n.getMonth(), n.getDate());
+  const e = new Date(n.getFullYear(), n.getMonth(), n.getDate() + 1);
+  return { startIso: s.toISOString(), endIso: e.toISOString() };
+};
+
+const profileStorageKey = () => (state.user ? `emt_profile_${state.user.id}` : "");
+
+const getEffectiveDisplayName = () =>
+  state.profile.displayName || state.user?.user_metadata?.full_name || state.user?.email || "使用者";
+
+const getEffectiveAvatar = () => state.profile.avatarDataUrl || DEFAULT_AVATAR;
+
+const setHint = (target, msg) => {
+  target.textContent = msg || "";
+};
+
+const readDebugLogs = () => {
+  try {
+    const raw = localStorage.getItem(DEBUG_LOG_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+};
+
+const writeDebugLogs = (rows) => {
+  try {
+    localStorage.setItem(DEBUG_LOG_KEY, JSON.stringify(rows.slice(-DEBUG_LOG_MAX)));
+  } catch {
+    // ignore write failure
+  }
+};
+
+const addDebugLog = (event, meta = {}, level = "info") => {
+  const row = {
+    ts: new Date().toISOString(),
+    level,
+    event,
+    online: navigator.onLine,
+    ...meta
+  };
+  const next = [...readDebugLogs(), row].slice(-DEBUG_LOG_MAX);
+  writeDebugLogs(next);
+  if (level === "error") {
+    console.error("[EMT-DEBUG]", row);
+  } else if (level === "warn") {
+    console.warn("[EMT-DEBUG]", row);
+  } else {
+    console.log("[EMT-DEBUG]", row);
+  }
+};
+
+const exportDebugLogsText = () => {
+  const logs = readDebugLogs();
+  return JSON.stringify(
+    {
+      exportedAt: new Date().toISOString(),
+      userId: state.user?.id || null,
+      sessionId: state.session?.id || null,
+      logCount: logs.length,
+      logs
+    },
+    null,
+    2
+  );
+};
+
+const readPendingQueue = () => {
+  try {
+    const raw = localStorage.getItem(PENDING_SYNC_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+};
+
+const writePendingQueue = (items) => {
+  try {
+    localStorage.setItem(PENDING_SYNC_KEY, JSON.stringify(items.slice(-PENDING_SYNC_MAX)));
+  } catch {
+    // ignore
+  }
+};
+
+const updatePendingStatusUI = () => {
+  const count = readPendingQueue().length;
+  if (!el.pendingStatus) return;
+  if (!count) {
+    el.pendingStatus.classList.add("hidden");
+    el.pendingStatus.textContent = "";
+    return;
+  }
+  el.pendingStatus.classList.remove("hidden");
+  el.pendingStatus.textContent = `待同步 ${count} 筆`;
+};
+
+const enqueuePendingItem = (item) => {
+  const current = readPendingQueue();
+  const row = {
+    id: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    createdAt: new Date().toISOString(),
+    tries: 0,
+    ...item
+  };
+  // update row payload should overwrite old pending update for same row
+  if (row.type === "dispatch_update" && row.rowId) {
+    const filtered = current.filter((x) => !(x.type === "dispatch_update" && x.rowId === row.rowId));
+    writePendingQueue([...filtered, row]);
+  } else {
+    writePendingQueue([...current, row]);
+  }
+  updatePendingStatusUI();
+  addDebugLog("pending.enqueue", { type: row.type, rowId: row.rowId || null });
+};
+
+const removePendingItem = (id) => {
+  writePendingQueue(readPendingQueue().filter((x) => x.id !== id));
+  updatePendingStatusUI();
+};
+
+const updatePendingItem = (id, patch) => {
+  const next = readPendingQueue().map((x) => (x.id === id ? { ...x, ...patch } : x));
+  writePendingQueue(next);
+  updatePendingStatusUI();
+};
+
+const setSyncing = (on, text = "資料同步中...") => {
+  state.busy = on;
+  if (on) {
+    el.syncText.textContent = text;
+  }
+  el.syncIndicator.setAttribute("aria-busy", on ? "true" : "false");
+  el.syncIndicator.classList.toggle("hidden", !on);
+  [
+    el.startShiftBtn,
+    el.startEventBtn,
+    el.finishEventBtn,
+    el.checkoutBtn,
+    el.saveDraftBtn,
+    el.confirmFinishBtn,
+    el.cancelEventBtn,
+    el.saveProfileBtn,
+    el.cancelProfileBtn,
+    el.deleteTodayBtn
+  ].forEach((btn) => {
+    if (!btn) return;
+    btn.disabled = on;
+  });
+  renderAuth();
+};
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const withTimeout = (promiseFactory, timeoutMs, label = "資料庫請求") =>
+  new Promise((resolve, reject) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+      controller.abort();
+      const err = new Error(`${label} 逾時（${Math.round(timeoutMs / 1000)} 秒）`);
+      err.isTimeout = true;
+      reject(err);
+    }, timeoutMs);
+    Promise.resolve()
+      .then(() => promiseFactory(controller.signal))
+      .then((value) => {
+        clearTimeout(timer);
+        resolve(value);
+      })
+      .catch((err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
+  });
+
+const isRetryableDbError = (err) => {
+  if (!err) return false;
+  if (err.isTimeout) return true;
+  const msg = String(err.message || "").toLowerCase();
+  const code = String(err.code || "");
+  if (code.startsWith("23")) return false; // constraints/duplicates are business errors
+  const keywords = [
+    "failed to fetch",
+    "network",
+    "timeout",
+    "timed out",
+    "fetch",
+    "503",
+    "504",
+    "ecconnreset",
+    "etimedout"
+  ];
+  return keywords.some((k) => msg.includes(k));
+};
+
+const dbQuery = async (queryFactory, options = {}) => {
+  const {
+    label = "資料庫請求",
+    timeoutMs = DB_TIMEOUT_MS,
+    attempts = DB_MAX_ATTEMPTS,
+    retryBaseMs = DB_RETRY_BASE_MS,
+    onRetryText
+  } = options;
+
+  const qStart = performance.now();
+  addDebugLog("db.query.start", { label, attempts, timeoutMs });
+  let lastErr = null;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const aStart = performance.now();
+    try {
+      const result = await withTimeout(queryFactory, timeoutMs, label);
+      addDebugLog("db.query.success", {
+        label,
+        attempt,
+        elapsedMs: Math.round(performance.now() - aStart),
+        totalMs: Math.round(performance.now() - qStart)
+      });
+      return result;
+    } catch (err) {
+      lastErr = err;
+      const canRetry = attempt < attempts && isRetryableDbError(err);
+      addDebugLog(
+        "db.query.error",
+        {
+          label,
+          attempt,
+          canRetry,
+          elapsedMs: Math.round(performance.now() - aStart),
+          totalMs: Math.round(performance.now() - qStart),
+          code: err?.code || null,
+          message: String(err?.message || "unknown error")
+        },
+        canRetry ? "warn" : "error"
+      );
+      if (!canRetry) break;
+      if (state.busy && typeof onRetryText === "function") {
+        const msg = onRetryText(attempt + 1, attempts);
+        if (msg) el.syncText.textContent = msg;
+      }
+      await sleep(retryBaseMs * 2 ** (attempt - 1));
+    }
+  }
+  addDebugLog(
+    "db.query.failed",
+    {
+      label,
+      attempts,
+      totalMs: Math.round(performance.now() - qStart),
+      code: lastErr?.code || null,
+      message: String(lastErr?.message || "unknown error")
+    },
+    "error"
+  );
+  throw lastErr || new Error(`${label} 失敗`);
+};
+
+const processPendingQueue = async () => {
+  if (!state.user || state.processingPendingQueue || state.busy) return;
+  const items = readPendingQueue();
+  if (!items.length) return;
+  state.processingPendingQueue = true;
+  addDebugLog("pending.process.start", { count: items.length });
+  try {
+    for (const item of items) {
+      try {
+        if (item.type === "dispatch_update") {
+          const { error } = await dbQuery(
+            (signal) =>
+              supabaseClient
+                .from("duty_dispatches")
+                .update(item.payload)
+                .eq("id", item.rowId)
+                .abortSignal(signal),
+            {
+              label: "待同步補送：更新出勤紀錄",
+              attempts: PENDING_SYNC_ATTEMPTS,
+              timeoutMs: PENDING_SYNC_TIMEOUT_MS
+            }
+          );
+          if (error) throw error;
+        } else if (item.type === "dispatch_insert") {
+          await insertDispatch(item.payload, "待同步補送");
+        } else {
+          removePendingItem(item.id);
+          continue;
+        }
+        removePendingItem(item.id);
+        addDebugLog("pending.process.success", { id: item.id, type: item.type });
+      } catch (err) {
+        updatePendingItem(item.id, {
+          tries: Number(item.tries || 0) + 1,
+          lastError: String(err?.message || "unknown error"),
+          lastTriedAt: new Date().toISOString()
+        });
+        addDebugLog(
+          "pending.process.error",
+          { id: item.id, type: item.type, message: String(err?.message || "") },
+          "warn"
+        );
+        break;
+      }
+    }
+  } finally {
+    state.processingPendingQueue = false;
+    updatePendingStatusUI();
+  }
+};
+
+const loadProfile = () => {
+  if (!state.user) return;
+  try {
+    const raw = localStorage.getItem(profileStorageKey());
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    state.profile = {
+      displayName: parsed.displayName || "",
+      unit: parsed.unit || "",
+      title: parsed.title || "",
+      phone: parsed.phone || "",
+      avatarDataUrl: parsed.avatarDataUrl || ""
+    };
+  } catch {
+    // ignore broken local data
+  }
+};
+
+const saveProfile = () => {
+  if (!state.user) return;
+  localStorage.setItem(profileStorageKey(), JSON.stringify(state.profile));
+};
+
+const applyProfileToUI = () => {
+  el.profileAvatar.src = getEffectiveAvatar();
+  if (el.displayName) el.displayName.value = getEffectiveDisplayName();
+  const parts = [state.profile.unit, state.profile.title, getEffectiveDisplayName()]
+    .map((x) => (x || "").trim())
+    .filter(Boolean);
+  el.brandMeta.textContent = parts.join(" ");
+};
+
+const parseNote = (note) => {
+  if (!note) return { segment: "event", transported: false, memo: "", open: false };
+  try {
+    const parsed = JSON.parse(note);
+    return {
+      segment: parsed.segment || "event",
+      transported: Boolean(parsed.transported),
+      memo: parsed.memo || "",
+      open: Boolean(parsed.open)
+    };
+  } catch {
+    return { segment: "event", transported: false, memo: note, open: false };
+  }
+};
+
+const encodeNote = (obj) => JSON.stringify(obj);
+
+const isStandby = (row) => parseNote(row.note).segment === "standby";
+const isOpenEvent = (row) => !isStandby(row) && parseNote(row.note).open === true;
+
+const actionMode = () => {
+  if (state.modeOverride) return state.modeOverride;
+  if (!state.session || state.session.status !== "active") return "none";
+  const last = latestRow();
+  if (!last) return "standby";
+  return isStandby(last) ? "standby" : "event";
+};
+
+const setButtonState = (btn, enabled) => {
+  btn.disabled = !enabled;
+  btn.setAttribute("aria-disabled", enabled ? "false" : "true");
+};
+
+const setCheckoutButtonMode = (isStartShiftMode) => {
+  if (!el.checkoutBtn) return;
+  if (isStartShiftMode) {
+    el.checkoutBtn.textContent = "開始協勤";
+    el.checkoutBtn.classList.remove("danger");
+    el.checkoutBtn.classList.add("primary");
+    return;
+  }
+  el.checkoutBtn.textContent = "退勤";
+  el.checkoutBtn.classList.remove("primary");
+  el.checkoutBtn.classList.add("danger");
+};
+
+const applyActionMode = (mode) => {
+  if (mode === "none") {
+    setCheckoutButtonMode(true);
+    setButtonState(el.startEventBtn, false);
+    setButtonState(el.finishEventBtn, false);
+    setButtonState(el.checkoutBtn, true);
+    return;
+  }
+
+  if (mode === "standby") {
+    setCheckoutButtonMode(false);
+    setButtonState(el.startEventBtn, true);
+    setButtonState(el.finishEventBtn, false);
+    setButtonState(el.checkoutBtn, true);
+    return;
+  }
+
+  setCheckoutButtonMode(false);
+  setButtonState(el.startEventBtn, false);
+  setButtonState(el.finishEventBtn, true);
+  setButtonState(el.checkoutBtn, false);
+};
+
+const setModeOverride = (mode) => {
+  state.modeOverride = mode;
+  applyActionMode(actionMode());
+};
+
+const customToggle = (selectEl, wrapEl, inputEl, triggerValue = "其他") => {
+  if (!selectEl || !wrapEl || !inputEl) return;
+  const on = selectEl.value === triggerValue;
+  wrapEl.classList.toggle("hidden", !on);
+  inputEl.required = on;
+  if (!on) inputEl.value = "";
+};
+
+const normalizeEquipmentArray = (value) => {
+  if (Array.isArray(value)) {
+    return value.map((x) => String(x || "").trim()).filter(Boolean);
+  }
+  if (typeof value === "string") {
+    return value
+      .split(/[、,，\s]+/)
+      .map((x) => x.trim())
+      .filter(Boolean);
+  }
+  return [];
+};
+
+const setEquipmentSelections = (value) => {
+  const selected = new Set(normalizeEquipmentArray(value));
+  (el.equipmentItems || []).forEach((input) => {
+    input.checked = selected.has(input.value);
+  });
+};
+
+const getSelectedEquipment = () =>
+  (el.equipmentItems || []).filter((input) => input.checked).map((input) => input.value);
+
+const latestRow = () => (state.rows.length ? state.rows[state.rows.length - 1] : null);
+
+const standbyPayload = (sessionId, isoTime, standbyMemo = "") => ({
+  session_id: sessionId,
+  seq_no: 1,
+  dispatch_time: isoTime,
+  vehicle: "其他",
+  vehicle_custom: "待命",
+  case_type: "其他",
+  case_type_custom: "待命",
+  patient_count: "其他",
+  patient_count_custom: "0",
+  hospital: "其他",
+  hospital_custom: "待命",
+  chief_complaint: "待命",
+  bp: null,
+  spo2: null,
+  equipment_used: [],
+  note: encodeNote({ segment: "standby", transported: false, memo: standbyMemo })
+});
+
+const nextSeq = async () => {
+  if (!state.rows?.length) return 1;
+  const maxSeq = state.rows.reduce((max, row) => {
+    const n = Number(row.seq_no || 0);
+    return Number.isFinite(n) ? Math.max(max, n) : max;
+  }, 0);
+  return maxSeq + 1;
+};
+
+const insertDispatch = async (payload, retryTextPrefix = "新增勤務明細同步中") => {
+  let seq = await nextSeq();
+  let attempts = 0;
+  while (attempts < 5) {
+    const { error } = await dbQuery(
+      (signal) => supabaseClient.from("duty_dispatches").insert([{ ...payload, seq_no: seq }]).abortSignal(signal),
+      {
+        label: "新增勤務明細",
+        attempts: DB_WRITE_ATTEMPTS,
+        timeoutMs: DB_WRITE_TIMEOUT_MS,
+        onRetryText: (n, total) => `${retryTextPrefix}（重試 ${n}/${total}）...`
+      }
+    );
+    if (!error) return;
+    if (!String(error.message || "").includes("uq_duty_dispatches_session_seq")) throw error;
+    seq += 1;
+    attempts += 1;
+  }
+  throw new Error("序號衝突過多，請重試。");
+};
+
+const loadSessionAndRows = async () => {
+  if (!state.user) return;
+  const { startIso, endIso } = dayBounds();
+  const { data: sessions, error: sesErr } = await dbQuery(
+    (signal) =>
+      supabaseClient
+        .from("duty_sessions")
+        .select("*")
+        .eq("user_id", state.user.id)
+        .gte("start_time", startIso)
+        .lt("start_time", endIso)
+        .order("start_time", { ascending: false })
+        .limit(1)
+        .abortSignal(signal),
+    { label: "讀取勤務主單", attempts: DB_READ_ATTEMPTS, timeoutMs: DB_READ_TIMEOUT_MS }
+  );
+  if (sesErr) throw sesErr;
+
+  state.session = sessions && sessions.length ? sessions[0] : null;
+  if (!state.session) {
+    state.rows = [];
+    return;
+  }
+
+  const { data: rows, error: rowErr } = await dbQuery(
+    (signal) =>
+      supabaseClient
+        .from("duty_dispatches")
+        .select("*")
+        .eq("session_id", state.session.id)
+        .order("dispatch_time", { ascending: true })
+        .abortSignal(signal),
+    { label: "讀取勤務明細", attempts: DB_READ_ATTEMPTS, timeoutMs: DB_READ_TIMEOUT_MS }
+  );
+  if (rowErr) throw rowErr;
+  state.rows = rows || [];
+};
+
+const transportedUnits = (row) => {
+  if (isStandby(row)) return 0;
+  if (row.hospital === "其他" && row.hospital_custom === "未送") return 0;
+  if (row.patient_count === "1") return 1;
+  if (row.patient_count === "2") return 2;
+  if (row.patient_count === "0") return 0;
+  const n = Number(row.patient_count_custom || 0);
+  return Number.isFinite(n) ? Math.max(0, n) : 0;
+};
+
+const setSummaryValues = ({ standbyMs = 0, eventCount = 0, transported = 0 }) => {
+  const totalMin = Math.floor(standbyMs / 60000);
+  const hh = String(Math.floor(totalMin / 60)).padStart(2, "0");
+  const mm = String(totalMin % 60).padStart(2, "0");
+  el.sumDutyHours.textContent = `${hh}:${mm}`;
+  el.sumEventCount.textContent = String(eventCount);
+  el.sumTransported.textContent = String(transported);
+};
+
+const rangeBoundsByType = (type) => {
+  const now = new Date();
+  if (type === "today") {
+    const s = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const e = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+    return { startIso: s.toISOString(), endIso: e.toISOString() };
+  }
+  if (type === "month") {
+    const s = new Date(now.getFullYear(), now.getMonth(), 1);
+    const e = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+    return { startIso: s.toISOString(), endIso: e.toISOString() };
+  }
+  if (type === "year") {
+    const s = new Date(now.getFullYear(), 0, 1);
+    const e = new Date(now.getFullYear() + 1, 0, 1);
+    return { startIso: s.toISOString(), endIso: e.toISOString() };
+  }
+  return null;
+};
+
+const updateSummaryTabsUI = () => {
+  const tabs = el.summaryTabs.querySelectorAll(".tab");
+  tabs.forEach((tab) => {
+    tab.classList.toggle("active", tab.dataset.range === state.summaryRange);
+  });
+};
+
+const buildSessionRowsMap = (rows) => {
+  const map = new Map();
+  rows.forEach((r) => {
+    if (!map.has(r.session_id)) map.set(r.session_id, []);
+    map.get(r.session_id).push(r);
+  });
+  map.forEach((arr) => arr.sort((a, b) => new Date(a.dispatch_time) - new Date(b.dispatch_time)));
+  return map;
+};
+
+const renderSummary = async () => {
+  if (!state.user) {
+    setSummaryValues({});
+    return;
+  }
+
+  const bounds = rangeBoundsByType(state.summaryRange);
+  let query = supabaseClient
+    .from("duty_sessions")
+    .select("id, end_time, status, start_time")
+    .eq("user_id", state.user.id)
+    .order("start_time", { ascending: false });
+
+  if (bounds) {
+    query = query.gte("start_time", bounds.startIso).lt("start_time", bounds.endIso);
+  }
+
+  const { data: sessions, error: sesErr } = await dbQuery((signal) => query.abortSignal(signal), {
+    label: "讀取摘要主單",
+    attempts: 2
+  });
+  if (sesErr) {
+    setHint(el.sessionStatus, `摘要讀取失敗：${sesErr.message}`);
+    return;
+  }
+  if (!sessions || !sessions.length) {
+    setSummaryValues({});
+    return;
+  }
+
+  const ids = sessions.map((s) => s.id);
+  const { data: rows, error: rowErr } = await dbQuery(
+    (signal) =>
+      supabaseClient
+        .from("duty_dispatches")
+        .select("session_id, dispatch_time, patient_count, patient_count_custom, note")
+        .in("session_id", ids)
+        .abortSignal(signal),
+    { label: "讀取摘要明細", attempts: 2 }
+  );
+  if (rowErr) {
+    setHint(el.sessionStatus, `摘要讀取失敗：${rowErr.message}`);
+    return;
+  }
+
+  const map = buildSessionRowsMap(rows || []);
+  let standbyMs = 0;
+  let eventCount = 0;
+  let transported = 0;
+
+  sessions.forEach((s) => {
+    const arr = map.get(s.id) || [];
+    for (let i = 0; i < arr.length; i += 1) {
+      const cur = arr[i];
+      const next = arr[i + 1];
+      const start = new Date(cur.dispatch_time).getTime();
+      const end = next
+        ? new Date(next.dispatch_time).getTime()
+        : s.end_time
+          ? new Date(s.end_time).getTime()
+          : Date.now();
+      const dur = Math.max(0, end - start);
+
+      if (isStandby(cur)) {
+        standbyMs += dur;
+      } else {
+        eventCount += 1;
+        transported += transportedUnits(cur);
+      }
+    }
+  });
+
+  setSummaryValues({ standbyMs, eventCount, transported });
+};
+
+const switchSummaryRange = async (nextRange) => {
+  if (!SUMMARY_RANGE_ORDER.includes(nextRange)) return;
+  state.summaryRange = nextRange;
+  updateSummaryTabsUI();
+  await renderSummary();
+};
+
+const rowSummary = (row) => {
+  if (isStandby(row)) {
+    const note = parseNote(row.note);
+    const prefix = (note.memo || "").trim();
+    return prefix ? `${prefix} / 待命` : "待命";
+  }
+  const hospital = row.hospital === "其他" ? row.hospital_custom : row.hospital;
+  const count = row.patient_count === "其他" ? row.patient_count_custom : row.patient_count;
+  const note = parseNote(row.note);
+  const memo = note.memo ? `，${note.memo}` : "";
+  const complaint = (row.chief_complaint || "").trim();
+  const complaintText = complaint ? `，${complaint}` : "";
+  return `${hospital || "未填"} ${count || "?"}人${complaintText}${memo}`;
+};
+
+const rowEndIso = (row) => {
+  const idx = state.rows.findIndex((r) => r.id === row.id);
+  const next = idx >= 0 ? state.rows[idx + 1] : null;
+  return next ? next.dispatch_time : state.session?.end_time || new Date().toISOString();
+};
+
+const parseHospitalForForm = (row) => {
+  if (row.hospital === "其他" && row.hospital_custom === "未送") {
+    return "未送";
+  }
+  if (row.hospital === "其他" && (!row.hospital_custom || row.hospital_custom === "未填")) {
+    return "未選";
+  }
+  const allowed = ["未選", "雙和", "永和耕莘", "慈濟", "新店耕莘", "板醫", "西園", "台大", "未送"];
+  if (allowed.includes(row.hospital)) {
+    return row.hospital;
+  }
+  return "未選";
+};
+
+const parsePatientCountForForm = (row) => {
+  const n =
+    row.patient_count === "其他" ? Number(row.patient_count_custom || 1) : Number(row.patient_count || 1);
+  if (n <= 0) return "0";
+  if (n >= 2) return "2";
+  return "1";
+};
+
+const parseCaseTypeForForm = (row) => {
+  const allowed = ["外科", "內科", "火警", "其他"];
+  return allowed.includes(row.case_type) ? row.case_type : "外科";
+};
+
+const syncPatientCountByHospital = () => {
+  if (!el.hospital || !el.patientCount) return;
+  const isNoTransport = el.hospital.value === "未送";
+  if (isNoTransport) {
+    el.patientCount.value = "0";
+  } else if (el.patientCount.value === "0") {
+    el.patientCount.value = "1";
+  }
+  el.patientCount.disabled = isNoTransport;
+};
+
+const fillEventForm = (row) => {
+  const note = parseNote(row.note);
+
+  el.eventFinishTime.value = toInput24h();
+  el.hospital.value = parseHospitalForForm(row);
+  el.patientCount.value = parsePatientCountForForm(row);
+  el.caseType.value = parseCaseTypeForForm(row);
+  if (el.chiefComplaint) {
+    el.chiefComplaint.value = row.chief_complaint || "";
+  }
+  el.bp.value = row.bp || "";
+  el.spo2.value = row.spo2 || "";
+  setEquipmentSelections(row.equipment_used || []);
+  el.memo.value = note.memo || "";
+  syncPatientCountByHospital();
+};
+
+const setEventSheetMode = (mode) => {
+  state.eventSheetMode = mode;
+  if (mode === "final") {
+    el.eventSheetTitle.textContent = "確認結束出勤（可再檢查）";
+    el.saveDraftBtn.classList.add("hidden");
+    el.confirmFinishBtn.classList.remove("hidden");
+    el.eventFinishTime.disabled = false;
+    return;
+  }
+
+  el.eventSheetTitle.textContent = "編輯紀錄";
+  el.saveDraftBtn.classList.remove("hidden");
+  el.confirmFinishBtn.classList.add("hidden");
+  el.eventFinishTime.disabled = true;
+};
+
+const buildEventUpdatePayload = (open) => {
+  const hospitalValue = el.hospital.value;
+  const hospital = hospitalValue === "未送" || hospitalValue === "未選" ? "其他" : hospitalValue;
+  const hospitalCustom = hospitalValue === "未送" ? "未送" : hospitalValue === "未選" ? "未選" : null;
+  const patientCountValue = hospitalValue === "未送" ? "0" : el.patientCount.value;
+
+  return {
+    vehicle: "其他",
+    vehicle_custom: "未填",
+    case_type: el.caseType.value,
+    case_type_custom: null,
+    patient_count: patientCountValue,
+    patient_count_custom: null,
+    hospital,
+    hospital_custom: hospitalCustom,
+    chief_complaint: el.chiefComplaint ? el.chiefComplaint.value.trim() : "",
+    bp: el.bp.value.trim() || null,
+    spo2: el.spo2.value.trim() || null,
+    equipment_used: getSelectedEquipment(),
+    note: encodeNote({
+      segment: "event",
+      memo: el.memo.value.trim(),
+      open
+    })
+  };
+};
+
+const resolveStandbyInsertIso = (eventRow, finishDate) => {
+  const base = finishDate instanceof Date && !Number.isNaN(finishDate.getTime()) ? finishDate : new Date();
+  const eventStartMs = new Date(eventRow.dispatch_time).getTime();
+  const finishMs = base.getTime();
+  if (!Number.isFinite(eventStartMs)) return base.toISOString();
+  if (finishMs > eventStartMs) return base.toISOString();
+  // Keep flow unblocked: if finish time is not after start, auto-shift to start+1s.
+  return new Date(eventStartMs + 1000).toISOString();
+};
+
+const renderTimeline = () => {
+  el.timelineList.innerHTML = "";
+  const noRows = !state.rows.length;
+  if (el.todayEmpty) {
+    el.todayEmpty.classList.toggle("hidden", !noRows);
+  }
+  if (!state.rows.length) {
+    if (el.startShiftBtn) {
+      el.startShiftBtn.disabled = state.busy || Boolean(state.session && state.session.status === "active");
+    }
+    return;
+  }
+
+  state.rows.forEach((row, idx) => {
+    const next = state.rows[idx + 1];
+    const end = next ? next.dispatch_time : state.session?.end_time || new Date().toISOString();
+    const item = document.createElement("article");
+    item.className = "item";
+    const isCurrent = Boolean(state.session?.status === "active" && idx === state.rows.length - 1);
+    if (isCurrent) {
+      item.classList.add("current-task");
+    }
+    if (!isStandby(row)) {
+      item.classList.add("editable");
+      item.dataset.rowId = String(row.id);
+    }
+    item.innerHTML = `
+      <div class="item-top">
+        <div class="item-time">${formatHm(row.dispatch_time)} - ${formatHm(end)}</div>
+        <div class="item-actions">
+          ${
+            isCurrent
+              ? `<span class="current-status ${isStandby(row) ? "standby" : "event"}">${isStandby(row) ? "待命中" : "出勤中"}<span class="dots" aria-hidden="true"><span>.</span><span>.</span><span>.</span></span></span>`
+              : !isStandby(row)
+                ? '<span class="edit-icon" aria-label="編輯">✎</span>'
+                : ""
+          }
+        </div>
+      </div>
+      <div class="item-note">${rowSummary(row)}${isOpenEvent(row) ? "（可點擊編輯）" : ""}</div>
+    `;
+    el.timelineList.appendChild(item);
+  });
+};
+
+const renderAuth = () => {
+  const loggedIn = Boolean(state.user);
+  el.authCard.classList.toggle("hidden", loggedIn);
+  el.workCard.classList.toggle("hidden", !loggedIn);
+  el.profileBtn.classList.toggle("hidden", !loggedIn);
+  if (!loggedIn) {
+    el.actionBar.classList.add("hidden");
+    return;
+  }
+  applyProfileToUI();
+
+  el.actionBar.classList.remove("hidden");
+  applyActionMode(actionMode());
+  updatePendingStatusUI();
+};
+
+const refresh = async (opts = {}) => {
+  const { showLoading = false, loadingText = "資料載入中...", deferSummary = true } = opts;
+  const canShow = showLoading && !state.busy;
+  const rfStart = performance.now();
+  addDebugLog("refresh.start", { showLoading, loadingText, deferSummary });
+  if (canShow) {
+    setSyncing(true, loadingText);
+  }
+  try {
+    await loadSessionAndRows();
+    state.modeOverride = null;
+    renderTimeline();
+    renderAuth();
+    updatePendingStatusUI();
+    if (deferSummary) {
+      window.setTimeout(async () => {
+        try {
+          await renderSummary();
+          addDebugLog("refresh.summary.done");
+        } catch (err) {
+          addDebugLog("refresh.summary.error", { message: String(err?.message || "") }, "warn");
+        }
+      }, 0);
+    } else {
+      await renderSummary();
+    }
+    addDebugLog("refresh.success", { elapsedMs: Math.round(performance.now() - rfStart) });
+  } catch (err) {
+    addDebugLog(
+      "refresh.error",
+      {
+        elapsedMs: Math.round(performance.now() - rfStart),
+        code: err?.code || null,
+        message: String(err?.message || "unknown error")
+      },
+      "error"
+    );
+    throw err;
+  } finally {
+    if (canShow) {
+      setSyncing(false);
+    }
+  }
+};
+
+const startShift = async (e) => {
+  if (e?.preventDefault) e.preventDefault();
+  setHint(el.sessionStatus, "");
+  if (state.session && state.session.status === "active") {
+    setHint(el.sessionStatus, "已有進行中的勤務。");
+    return;
+  }
+
+  let st = new Date();
+  if (el.startTime?.value) {
+    const parsed = parseInput24h(el.startTime.value);
+    if (!parsed) {
+      setHint(el.sessionStatus, "起始時間格式錯誤，請用 YYYY-MM-DD HH:mm。");
+      return;
+    }
+    st = parsed;
+  }
+
+  try {
+    setSyncing(true, "建立勤務中...");
+    const taskType = el.taskType?.value || "協勤";
+    const displayName = (el.displayName?.value || getEffectiveDisplayName()).trim();
+    const payload = {
+      user_id: state.user.id,
+      display_name: displayName,
+      start_time: st.toISOString(),
+      task_type: taskType,
+      task_type_custom: taskType === "其他" ? (el.taskTypeCustom?.value || "").trim() : null,
+      status: "active"
+    };
+    const { data, error } = await dbQuery(
+      (signal) =>
+        supabaseClient.from("duty_sessions").insert([payload]).select("*").single().abortSignal(signal),
+      {
+        label: "建立勤務主單",
+        attempts: DB_WRITE_ATTEMPTS,
+        timeoutMs: DB_WRITE_TIMEOUT_MS,
+        onRetryText: (n, total) => `建立勤務中（重試 ${n}/${total}）...`
+      }
+    );
+    if (error) throw error;
+    state.session = data;
+    await insertDispatch(standbyPayload(state.session.id, payload.start_time, "開始協勤"), "建立勤務同步中");
+    await refresh();
+    setHint(el.sessionStatus, "");
+  } catch (err) {
+    setHint(el.sessionStatus, `開始勤務失敗：${err.message}`);
+  } finally {
+    setSyncing(false);
+  }
+};
+
+const startEvent = async () => {
+  if (actionMode() !== "standby") return;
+  if (state.busy) return;
+  if (!state.session || state.session.status !== "active") return;
+  const last = latestRow();
+  if (last && !isStandby(last)) return;
+  const nowIso = new Date().toISOString();
+  const eventPayload = {
+    session_id: state.session.id,
+    dispatch_time: nowIso,
+    vehicle: "其他",
+    vehicle_custom: "未填",
+    case_type: "外科",
+    case_type_custom: null,
+    patient_count: "1",
+    patient_count_custom: null,
+    hospital: "其他",
+    hospital_custom: "未選",
+    chief_complaint: "",
+    bp: null,
+    spo2: null,
+    equipment_used: [],
+    note: encodeNote({ segment: "event", transported: false, memo: "", open: true })
+  };
+
+  try {
+    setSyncing(true, "開始出勤同步中...");
+    setModeOverride("event");
+    await insertDispatch(eventPayload, "開始出勤同步中");
+    await refresh();
+  } catch (err) {
+    if (isRetryableDbError(err)) {
+      enqueuePendingItem({ type: "dispatch_insert", payload: eventPayload });
+      setHint(el.sessionStatus, "開始出勤暫時失敗，已加入待同步。");
+      processPendingQueue().catch(() => {});
+      return;
+    }
+    setHint(el.sessionStatus, `開始出勤失敗：${err.message}`);
+  } finally {
+    setModeOverride(null);
+    setSyncing(false);
+  }
+};
+
+const openEventSheet = () => {
+  if (actionMode() !== "event") return;
+  const last = latestRow();
+  if (!last || isStandby(last)) return;
+  state.editRowId = last.id;
+  state.editRowIsOpen = true;
+  fillEventForm(last);
+  setEventSheetMode("final");
+  setHint(el.eventStatus, "");
+  el.eventSheet.classList.remove("hidden");
+};
+
+const openEventSheetByRowId = (rowId) => {
+  const row = state.rows.find((r) => r.id === rowId);
+  if (!row || isStandby(row)) return;
+  state.editRowId = row.id;
+  state.editRowIsOpen = isOpenEvent(row);
+  fillEventForm(row);
+  el.eventFinishTime.value = toInput24h(new Date(rowEndIso(row)));
+  setHint(el.eventStatus, "");
+  setEventSheetMode("edit");
+  el.eventSheet.classList.remove("hidden");
+};
+
+const closeEventSheet = (force = false) => {
+  if (state.busy && !force) return;
+  state.editRowId = null;
+  state.editRowIsOpen = false;
+  state.eventSheetMode = "final";
+  el.eventForm.reset();
+  setEquipmentSelections([]);
+  if (el.hospital) el.hospital.value = "未選";
+  if (el.patientCount) {
+    el.patientCount.value = "1";
+    el.patientCount.disabled = false;
+  }
+  if (el.caseType) el.caseType.value = "外科";
+  el.eventFinishTime.disabled = false;
+  el.saveDraftBtn.classList.add("hidden");
+  el.confirmFinishBtn.classList.remove("hidden");
+  el.eventSheet.classList.add("hidden");
+};
+
+const finishEvent = async (e) => {
+  e.preventDefault();
+  if (state.eventSheetMode !== "final") return;
+  if (state.busy) return;
+  const rowId = state.editRowId || latestRow()?.id;
+  const row = state.rows.find((r) => r.id === rowId);
+  if (!row || isStandby(row)) return;
+
+  const finish = parseInput24h(el.eventFinishTime.value);
+  if (state.editRowIsOpen && !finish) {
+    setHint(el.eventStatus, "結束時間格式錯誤，請用 YYYY-MM-DD HH:mm。");
+    return;
+  }
+  // Temporarily disabled by request:
+  // allow finish time earlier than start time during field operations.
+
+  try {
+    setSyncing(true, "結束出勤同步中...");
+    setModeOverride("standby");
+
+    const payload = buildEventUpdatePayload(false);
+    const { error: upErr } = await dbQuery(
+      (signal) => supabaseClient.from("duty_dispatches").update(payload).eq("id", row.id).abortSignal(signal),
+      {
+        label: "更新出勤紀錄",
+        attempts: DB_WRITE_ATTEMPTS,
+        timeoutMs: DB_WRITE_TIMEOUT_MS,
+        onRetryText: (n, total) => `結束出勤同步中（重試 ${n}/${total}）...`
+      }
+    );
+    if (upErr) throw upErr;
+
+    const standbyIso = resolveStandbyInsertIso(row, finish);
+    if (state.editRowIsOpen) {
+      await insertDispatch(standbyPayload(state.session.id, standbyIso), "結束出勤同步中");
+    }
+    closeEventSheet(true);
+    await refresh();
+  } catch (err) {
+    if (isRetryableDbError(err)) {
+      const payload = buildEventUpdatePayload(false);
+      const noteOpen = parseNote(row.note).open === true;
+      if (noteOpen) {
+        enqueuePendingItem({ type: "dispatch_update", rowId: row.id, payload });
+      }
+      const standbyIso = resolveStandbyInsertIso(row, finish);
+      if (state.editRowIsOpen) {
+        enqueuePendingItem({
+          type: "dispatch_insert",
+          payload: standbyPayload(state.session.id, standbyIso)
+        });
+      }
+      updatePendingStatusUI();
+      setHint(el.eventStatus, "網路不穩，已改為待同步，恢復後會自動補送。");
+      return;
+    }
+    setHint(el.eventStatus, `結束出勤失敗：${err.message}`);
+  } finally {
+    setModeOverride(null);
+    setSyncing(false);
+  }
+};
+
+const saveEventDraft = async () => {
+  if (state.eventSheetMode !== "edit") return;
+  if (state.busy) return;
+  const rowId = state.editRowId || latestRow()?.id;
+  const row = state.rows.find((r) => r.id === rowId);
+  if (!row || isStandby(row)) return;
+
+  try {
+    setSyncing(true, "暫存同步中...");
+    setHint(el.eventStatus, "儲存中...");
+    const payload = buildEventUpdatePayload(state.editRowIsOpen);
+    const { error } = await dbQuery(
+      (signal) => supabaseClient.from("duty_dispatches").update(payload).eq("id", row.id).abortSignal(signal),
+      {
+        label: "暫存出勤紀錄",
+        attempts: DRAFT_WRITE_ATTEMPTS,
+        timeoutMs: DRAFT_WRITE_TIMEOUT_MS,
+        onRetryText: (n, total) => `暫存同步中（重試 ${n}/${total}）...`
+      }
+    );
+    if (error) throw error;
+    await refresh();
+    closeEventSheet(true);
+    setHint(el.sessionStatus, "草稿已儲存。");
+  } catch (err) {
+    if (isRetryableDbError(err)) {
+      const payload = buildEventUpdatePayload(state.editRowIsOpen);
+      enqueuePendingItem({ type: "dispatch_update", rowId: row.id, payload });
+      closeEventSheet(true);
+      setHint(el.sessionStatus, "網路不穩，已先存為待同步，恢復後會自動補送。");
+      return;
+    }
+    setHint(el.eventStatus, `草稿儲存失敗：${err.message}`);
+  } finally {
+    setSyncing(false);
+  }
+};
+
+const checkout = async () => {
+  if (actionMode() === "none") {
+    await startShift();
+    return;
+  }
+  if (actionMode() !== "standby") return;
+  if (state.busy) return;
+  if (!state.session || state.session.status !== "active") return;
+  const last = latestRow();
+  if (last && !isStandby(last)) {
+    setHint(el.sessionStatus, "請先按「結束出勤」，再退勤。");
+    return;
+  }
+
+  try {
+    setSyncing(true, "退勤同步中...");
+    setModeOverride("none");
+    const now = new Date().toISOString();
+    const { error } = await dbQuery(
+      (signal) =>
+        supabaseClient
+          .from("duty_sessions")
+          .update({ end_time: now, status: "completed" })
+          .eq("id", state.session.id)
+          .abortSignal(signal),
+      {
+        label: "退勤更新",
+        attempts: DB_WRITE_ATTEMPTS,
+        timeoutMs: DB_WRITE_TIMEOUT_MS,
+        onRetryText: (n, total) => `退勤同步中（重試 ${n}/${total}）...`
+      }
+    );
+    if (error) throw error;
+    await refresh();
+    setHint(el.sessionStatus, "退勤完成。");
+  } catch (err) {
+    setHint(el.sessionStatus, `退勤失敗：${err.message}`);
+  } finally {
+    setModeOverride(null);
+    setSyncing(false);
+  }
+};
+
+const deleteTodayRecords = async () => {
+  if (!state.user || state.busy) return;
+  const ok = window.confirm("確認刪除今日全部紀錄？此動作暫時無法復原。");
+  if (!ok) return;
+
+  setHint(el.sessionStatus, "");
+  addDebugLog("deleteToday.start");
+
+  try {
+    setSyncing(true, "刪除今日紀錄中...");
+    setModeOverride("none");
+    const { startIso, endIso } = dayBounds();
+    const { data: sessions, error: sesErr } = await dbQuery(
+      (signal) =>
+        supabaseClient
+          .from("duty_sessions")
+          .select("id")
+          .eq("user_id", state.user.id)
+          .gte("start_time", startIso)
+          .lt("start_time", endIso)
+          .abortSignal(signal),
+      { label: "讀取今日主單（刪除）", attempts: DB_READ_ATTEMPTS, timeoutMs: DB_READ_TIMEOUT_MS }
+    );
+    if (sesErr) throw sesErr;
+
+    const ids = (sessions || []).map((s) => s.id).filter(Boolean);
+    if (!ids.length) {
+      addDebugLog("deleteToday.empty");
+      setHint(el.sessionStatus, "今日無可刪除紀錄。");
+      return;
+    }
+
+    const { error: delDispatchErr } = await dbQuery(
+      (signal) => supabaseClient.from("duty_dispatches").delete().in("session_id", ids).abortSignal(signal),
+      { label: "刪除今日明細", attempts: DB_WRITE_ATTEMPTS, timeoutMs: DB_WRITE_TIMEOUT_MS }
+    );
+    if (delDispatchErr) throw delDispatchErr;
+
+    const { error: delSessionErr } = await dbQuery(
+      (signal) =>
+        supabaseClient
+          .from("duty_sessions")
+          .delete()
+          .in("id", ids)
+          .eq("user_id", state.user.id)
+          .abortSignal(signal),
+      { label: "刪除今日主單", attempts: DB_WRITE_ATTEMPTS, timeoutMs: DB_WRITE_TIMEOUT_MS }
+    );
+    if (delSessionErr) throw delSessionErr;
+
+    closeEventSheet(true);
+    state.session = null;
+    state.rows = [];
+    await refresh({ showLoading: false });
+    addDebugLog("deleteToday.success", { count: ids.length });
+    setHint(el.sessionStatus, `已刪除今日 ${ids.length} 筆主單與相關明細。`);
+  } catch (err) {
+    addDebugLog("deleteToday.error", { message: String(err?.message || "") }, "error");
+    setHint(el.sessionStatus, `刪除失敗：${err.message}`);
+  } finally {
+    setSyncing(false);
+  }
+};
+
+const login = async () => {
+  await supabaseClient.auth.signInWithOAuth({
+    provider: "google",
+    options: { redirectTo: window.location.href }
+  });
+};
+
+const logout = async () => {
+  await supabaseClient.auth.signOut();
+};
+
+const openProfileSheet = () => {
+  if (!state.user) return;
+  state.profileDraftAvatarDataUrl = state.profile.avatarDataUrl || "";
+  el.profileEmail.value = state.user.email || "";
+  el.profileDisplayName.value = state.profile.displayName || "";
+  el.profileUnit.value = state.profile.unit || "";
+  el.profileTitle.value = state.profile.title || "";
+  el.profilePhone.value = state.profile.phone || "";
+  el.profileAvatarFile.value = "";
+  el.profileAvatarPreview.src = state.profileDraftAvatarDataUrl || DEFAULT_AVATAR;
+  setHint(el.profileStatus, "");
+  el.profileSheet.classList.remove("hidden");
+};
+
+const closeProfileSheet = () => {
+  if (state.busy) return;
+  el.profileForm.reset();
+  setHint(el.profileStatus, "");
+  el.profileSheet.classList.add("hidden");
+};
+
+const onProfileAvatarFileChange = async () => {
+  const file = el.profileAvatarFile.files?.[0];
+  if (!file) return;
+  if (!["image/jpeg", "image/png"].includes(file.type)) {
+    setHint(el.profileStatus, "只支援 JPG/PNG。");
+    el.profileAvatarFile.value = "";
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = () => {
+    state.profileDraftAvatarDataUrl = String(reader.result || "");
+    el.profileAvatarPreview.src = state.profileDraftAvatarDataUrl || DEFAULT_AVATAR;
+    setHint(el.profileStatus, "新頭像已載入，按「儲存」套用。");
+  };
+  reader.readAsDataURL(file);
+};
+
+const submitProfile = (e) => {
+  e.preventDefault();
+  state.profile = {
+    displayName: el.profileDisplayName.value.trim(),
+    unit: el.profileUnit.value.trim(),
+    title: el.profileTitle.value.trim(),
+    phone: el.profilePhone.value.trim(),
+    avatarDataUrl: state.profileDraftAvatarDataUrl || state.profile.avatarDataUrl || ""
+  };
+  saveProfile();
+  applyProfileToUI();
+  setHint(el.profileStatus, "已儲存。");
+  closeProfileSheet();
+};
+
+const copyDebugLogs = async () => {
+  const text = exportDebugLogsText();
+  try {
+    await navigator.clipboard.writeText(text);
+    setHint(el.profileStatus, `偵錯記錄已複製（${readDebugLogs().length} 筆）。`);
+  } catch {
+    setHint(el.profileStatus, "複製失敗，請改用瀏覽器主控台貼給我。");
+    console.log("[EMT-DEBUG-EXPORT]\n" + text);
+  }
+};
+
+const clearDebugLogs = () => {
+  writeDebugLogs([]);
+  setHint(el.profileStatus, "偵錯記錄已清除。");
+};
+
+const bind = () => {
+  if (el.startTime) el.startTime.value = toInput24h();
+  if (el.fillStartNowBtn && el.startTime) {
+    el.fillStartNowBtn.addEventListener("click", () => {
+      el.startTime.value = toInput24h();
+    });
+  }
+  if (el.fillEventNowBtn && el.eventFinishTime) {
+    el.fillEventNowBtn.addEventListener("click", () => {
+      el.eventFinishTime.value = toInput24h();
+    });
+  }
+
+  if (el.taskType) {
+    el.taskType.addEventListener("change", () => {
+      customToggle(el.taskType, el.taskTypeCustomWrap, el.taskTypeCustom, "其他");
+    });
+  }
+  if (el.hospital) {
+    el.hospital.addEventListener("change", () => {
+      syncPatientCountByHospital();
+    });
+  }
+
+  el.googleLoginBtn.addEventListener("click", login);
+  el.profileBtn.addEventListener("click", openProfileSheet);
+  el.logoutBtn.addEventListener("click", logout);
+  if (el.startShiftBtn) el.startShiftBtn.addEventListener("click", startShift);
+  if (el.sessionForm) el.sessionForm.addEventListener("submit", startShift);
+  if (el.deleteTodayBtn) el.deleteTodayBtn.addEventListener("click", deleteTodayRecords);
+  el.startEventBtn.addEventListener("click", startEvent);
+  el.finishEventBtn.addEventListener("click", openEventSheet);
+  el.checkoutBtn.addEventListener("click", checkout);
+  el.saveDraftBtn.addEventListener("click", saveEventDraft);
+  el.eventForm.addEventListener("submit", finishEvent);
+  el.cancelEventBtn.addEventListener("click", closeEventSheet);
+  el.profileForm.addEventListener("submit", submitProfile);
+  el.profileAvatarFile.addEventListener("change", onProfileAvatarFileChange);
+  el.cancelProfileBtn.addEventListener("click", closeProfileSheet);
+  if (el.copyDebugLogBtn) el.copyDebugLogBtn.addEventListener("click", copyDebugLogs);
+  if (el.clearDebugLogBtn) el.clearDebugLogBtn.addEventListener("click", clearDebugLogs);
+  el.summaryTabs.addEventListener("click", async (event) => {
+    const btn = event.target.closest(".tab");
+    if (!btn) return;
+    await switchSummaryRange(btn.dataset.range);
+  });
+  el.summaryCard.addEventListener("touchstart", (event) => {
+    state.summaryTouchStartX = event.changedTouches?.[0]?.clientX ?? null;
+  }, { passive: true });
+  el.summaryCard.addEventListener("touchend", async (event) => {
+    const startX = state.summaryTouchStartX;
+    const endX = event.changedTouches?.[0]?.clientX ?? null;
+    state.summaryTouchStartX = null;
+    if (startX === null || endX === null) return;
+    const dx = endX - startX;
+    if (Math.abs(dx) < 40) return;
+    const idx = SUMMARY_RANGE_ORDER.indexOf(state.summaryRange);
+    if (idx < 0) return;
+    if (dx < 0 && idx < SUMMARY_RANGE_ORDER.length - 1) {
+      await switchSummaryRange(SUMMARY_RANGE_ORDER[idx + 1]);
+      return;
+    }
+    if (dx > 0 && idx > 0) {
+      await switchSummaryRange(SUMMARY_RANGE_ORDER[idx - 1]);
+    }
+  }, { passive: true });
+  el.timelineList.addEventListener("click", (event) => {
+    const target = event.target.closest(".item.editable");
+    if (!target) return;
+    const rowId = Number(target.dataset.rowId);
+    if (!Number.isFinite(rowId)) return;
+    openEventSheetByRowId(rowId);
+  });
+};
+
+const initAuth = async () => {
+  addDebugLog("initAuth.start");
+  let firstInitialSessionHandled = false;
+  let authData = null;
+  try {
+    const { data } = await dbQuery(() => supabaseClient.auth.getSession(), {
+      label: "讀取登入狀態",
+      attempts: 2,
+      timeoutMs: 8000
+    });
+    authData = data;
+    addDebugLog("initAuth.getSession.success", { hasSession: Boolean(data?.session) });
+  } catch {
+    addDebugLog("initAuth.getSession.error", {}, "error");
+    authData = null;
+  }
+
+  state.user = authData?.session?.user || null;
+  loadProfile();
+  renderAuth();
+  if (state.user) {
+    try {
+      await refresh({ showLoading: true, loadingText: "資料載入中..." });
+      await processPendingQueue();
+    } catch (err) {
+      setHint(el.sessionStatus, `資料讀取失敗：${err.message}`);
+      addDebugLog("initAuth.firstRefresh.error", { message: String(err?.message || "") }, "error");
+      window.setTimeout(async () => {
+        addDebugLog("initAuth.backgroundRetry.start");
+        try {
+          await refresh({ showLoading: false, loadingText: "資料載入中..." });
+          await processPendingQueue();
+          addDebugLog("initAuth.backgroundRetry.success");
+        } catch (retryErr) {
+          addDebugLog("initAuth.backgroundRetry.error", { message: String(retryErr?.message || "") }, "warn");
+        }
+      }, 2500);
+    }
+  }
+
+  supabaseClient.auth.onAuthStateChange(async (evt, session) => {
+    addDebugLog("authState.changed", { evt, hasSession: Boolean(session) });
+    const prevUserId = state.user?.id || null;
+    const nextUserId = session?.user?.id || null;
+    // Supabase emits INITIAL_SESSION after subscription; skip the first one
+    // to avoid duplicate startup refresh and long blocking waits.
+    if (evt === "INITIAL_SESSION" && !firstInitialSessionHandled) {
+      firstInitialSessionHandled = true;
+      addDebugLog("authState.initialSession.skipped");
+      return;
+    }
+    if (evt === "SIGNED_IN" && prevUserId && prevUserId === nextUserId) {
+      addDebugLog("authState.signedIn.sameUser.skipRefresh", { userId: nextUserId });
+      state.user = session?.user || null;
+      return;
+    }
+
+    state.user = session?.user || null;
+    if (!state.user) {
+      state.session = null;
+      state.rows = [];
+      state.profile = { displayName: "", unit: "", title: "", phone: "", avatarDataUrl: "" };
+      await renderSummary();
+      renderTimeline();
+      renderAuth();
+      return;
+    }
+
+    // Token refresh is frequent and does not require reloading all app data.
+    // Skipping avoids occasional long stalls from background auth recovery.
+    if (evt === "TOKEN_REFRESHED") {
+      addDebugLog("authState.tokenRefreshed.skipRefresh");
+      return;
+    }
+
+    loadProfile();
+    try {
+      await refresh({ showLoading: false, loadingText: "資料載入中..." });
+      await processPendingQueue();
+    } catch (err) {
+      setHint(el.sessionStatus, `資料讀取失敗：${err.message}`);
+      addDebugLog("authState.refresh.error", { message: String(err?.message || "") }, "error");
+    }
+  });
+};
+
+const init = async () => {
+  addDebugLog("init.start", { href: window.location.href });
+  window.addEventListener("online", async () => {
+    addDebugLog("network.online");
+    await processPendingQueue();
+  });
+  window.addEventListener("offline", () => addDebugLog("network.offline", {}, "warn"));
+  bind();
+  updatePendingStatusUI();
+  applyActionMode("none");
+  setEventSheetMode("final");
+  updateSummaryTabsUI();
+  customToggle(el.taskType, el.taskTypeCustomWrap, el.taskTypeCustom, "其他");
+  syncPatientCountByHospital();
+  state.pendingQueueTimer = window.setInterval(() => {
+    processPendingQueue().catch(() => {});
+  }, 15000);
+  await initAuth();
+  await processPendingQueue();
+  addDebugLog("init.done");
+};
+
+init();

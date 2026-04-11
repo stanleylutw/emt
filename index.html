@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
+    <title>EMT 時間軸勤務</title>
+    <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="app">
+      <header class="topbar">
+        <div class="brand-row">
+          <div class="brand">
+            <img class="brand-logo" src="assets/star-of-life.png" alt="救護標誌" />
+            <div>
+              <h1 class="brand-title">救護義消執勤日誌</h1>
+              <p id="brandMeta" class="brand-meta"></p>
+              <p id="pendingStatus" class="pending-status hidden"></p>
+            </div>
+          </div>
+          <button id="profileBtn" type="button" class="avatar-btn" aria-label="開啟個人資料">
+            <img id="profileAvatar" src="assets/star-of-life.png" alt="帳號頭像" />
+          </button>
+        </div>
+      </header>
+
+      <section id="authCard" class="card">
+        <h2>登入</h2>
+        <p class="hint">先登入才能開始與續接勤務。</p>
+        <button id="googleLoginBtn" type="button" class="primary">使用 Google 登入</button>
+      </section>
+
+      <section id="workCard" class="hidden">
+        <section id="summaryCard" class="card">
+          <div id="summaryTabs" class="summary-tabs" aria-label="摘要區間">
+            <button type="button" class="tab active" data-range="today">今日</button>
+            <button type="button" class="tab" data-range="month">本月</button>
+            <button type="button" class="tab" data-range="year">本年</button>
+            <button type="button" class="tab" data-range="all">總紀錄</button>
+          </div>
+          <div class="stats">
+            <article><p>總協勤時數</p><strong id="sumDutyHours">00:00</strong></article>
+            <article><p>出勤次數</p><strong id="sumEventCount">0</strong></article>
+            <article><p>送醫人數</p><strong id="sumTransported">0</strong></article>
+          </div>
+        </section>
+
+        <section class="card today-duty-card">
+          <div class="today-duty-head">
+            <h2>今日勤務</h2>
+            <button id="deleteTodayBtn" type="button" class="icon-btn danger-icon" aria-label="刪除今日紀錄">🗑</button>
+          </div>
+          <div id="todayEmpty" class="today-empty hidden">
+            <button id="startShiftBtn" type="button" class="primary big-start-btn">開始協勤</button>
+          </div>
+          <div id="timelineList" class="timeline"></div>
+          <p id="sessionStatus" class="hint"></p>
+        </section>
+      </section>
+    </main>
+
+    <footer id="actionBar" class="action-bar hidden">
+      <button id="startEventBtn" class="primary" type="button">開始出勤</button>
+      <button id="finishEventBtn" class="primary" type="button">結束出勤</button>
+      <button id="checkoutBtn" class="danger" type="button">退勤</button>
+    </footer>
+
+    <section id="eventSheet" class="sheet hidden">
+      <div class="sheet-body">
+        <h2 id="eventSheetTitle">結束出勤</h2>
+        <form id="eventForm" class="form">
+          <label>
+            結束時間
+            <div class="inline">
+              <input id="eventFinishTime" type="text" inputmode="numeric" placeholder="YYYY-MM-DD HH:mm" required />
+              <button id="fillEventNowBtn" class="small" type="button">現在</button>
+            </div>
+          </label>
+          <div class="tri-row">
+            <label>
+              醫院
+              <select id="hospital" required>
+                <option value="未選" selected>未選</option>
+                <option value="雙和">雙和</option>
+                <option value="永和耕莘">永和耕莘</option>
+                <option value="慈濟">慈濟</option>
+                <option value="新店耕莘">新店耕莘</option>
+                <option value="板醫">板醫</option>
+                <option value="西園">西園</option>
+                <option value="台大">台大</option>
+                <option value="未送">未送</option>
+              </select>
+            </label>
+            <label>
+              人數
+              <select id="patientCount" required>
+                <option value="0">0</option>
+                <option value="1" selected>1</option>
+                <option value="2">2</option>
+              </select>
+            </label>
+            <label>
+              科別
+              <select id="caseType" required>
+                <option value="外科" selected>外科</option>
+                <option value="內科">內科</option>
+                <option value="火警">火警</option>
+                <option value="其他">其他</option>
+              </select>
+            </label>
+          </div>
+          <div class="tri-row vital-row">
+            <label>
+              血壓
+              <input id="bp" type="text" />
+            </label>
+            <label>
+              血氧
+              <input id="spo2" type="text" />
+            </label>
+          </div>
+          <label>
+            主訴
+            <textarea id="chiefComplaint" rows="2" placeholder="可輸入主訴"></textarea>
+          </label>
+          <fieldset class="equipment-grid">
+            <legend>使用器材</legend>
+            <label class="check-line"><input type="checkbox" name="equipmentItem" value="血糖" /><span>血糖</span></label>
+            <label class="check-line"><input type="checkbox" name="equipmentItem" value="氧氣" /><span>氧氣</span></label>
+            <label class="check-line"><input type="checkbox" name="equipmentItem" value="傷口處理" /><span>傷口處理</span></label>
+            <label class="check-line"><input type="checkbox" name="equipmentItem" value="IV" /><span>IV</span></label>
+            <label class="check-line"><input type="checkbox" name="equipmentItem" value="AED" /><span>AED</span></label>
+            <label class="check-line"><input type="checkbox" name="equipmentItem" value="BVM" /><span>BVM</span></label>
+            <label class="check-line"><input type="checkbox" name="equipmentItem" value="抽吸器" /><span>抽吸器</span></label>
+            <label class="check-line"><input type="checkbox" name="equipmentItem" value="頸圈" /><span>頸圈</span></label>
+            <label class="check-line"><input type="checkbox" name="equipmentItem" value="長背板" /><span>長背板</span></label>
+            <label class="check-line"><input type="checkbox" name="equipmentItem" value="止血帶" /><span>止血帶</span></label>
+            <label class="check-line"><input type="checkbox" name="equipmentItem" value="紗布敷料" /><span>紗布敷料</span></label>
+            <label class="check-line"><input type="checkbox" name="equipmentItem" value="心電貼片" /><span>心電貼片</span></label>
+          </fieldset>
+          <label>
+            備註
+            <textarea id="memo" rows="2"></textarea>
+          </label>
+          <div class="sheet-actions">
+            <button id="saveDraftBtn" type="button" class="ghost">暫存</button>
+            <button id="confirmFinishBtn" type="submit" class="primary">確認結束</button>
+            <button id="cancelEventBtn" type="button" class="ghost">取消</button>
+          </div>
+          <p id="eventStatus" class="hint"></p>
+        </form>
+      </div>
+    </section>
+
+    <section id="profileSheet" class="sheet hidden">
+      <div class="sheet-body">
+        <h2>個人資料</h2>
+        <form id="profileForm" class="form">
+          <label>
+            帳號
+            <input id="profileEmail" type="text" readonly />
+          </label>
+          <label>
+            顯示名稱
+            <input id="profileDisplayName" type="text" />
+          </label>
+          <label>
+            分隊/單位
+            <input id="profileUnit" type="text" />
+          </label>
+          <label>
+            職稱
+            <input id="profileTitle" type="text" />
+          </label>
+          <label>
+            聯絡電話
+            <input id="profilePhone" type="text" inputmode="tel" />
+          </label>
+          <label>
+            帳號 Logo（JPG/PNG）
+            <input id="profileAvatarFile" type="file" accept="image/png,image/jpeg" />
+          </label>
+          <div class="avatar-preview-wrap">
+            <img id="profileAvatarPreview" alt="頭像預覽" />
+          </div>
+          <div class="sheet-actions">
+            <button id="saveProfileBtn" type="submit" class="primary">儲存</button>
+            <button id="cancelProfileBtn" type="button" class="ghost">取消</button>
+            <button id="logoutBtn" type="button" class="danger">登出</button>
+          </div>
+          <div class="sheet-actions debug-actions">
+            <button id="copyDebugLogBtn" type="button" class="ghost">複製偵錯記錄</button>
+            <button id="clearDebugLogBtn" type="button" class="ghost">清除偵錯記錄</button>
+          </div>
+          <p id="profileStatus" class="hint"></p>
+        </form>
+      </div>
+    </section>
+
+    <div id="syncIndicator" class="sync-indicator hidden" aria-live="polite" aria-busy="false">
+      <div class="sync-box" role="status" aria-live="polite">
+        <span class="sync-spinner" aria-hidden="true"></span>
+        <span id="syncText">資料同步中...</span>
+      </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="app.js"></script>
+  </body>
+</html>
