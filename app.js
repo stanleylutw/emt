@@ -32,7 +32,11 @@ const state = {
   profileLoadPromise: null,
   refreshPromise: null,
   liveUiTimer: null,
-  liveUiLastMinute: null
+  liveUiLastMinute: null,
+  pendingQueueCache: [],
+  pendingQueueOwner: null
+  ,
+  actionLocks: {}
 };
 
 const el = {
@@ -138,8 +142,152 @@ const DEBUG_LOG_MAX = 300;
 const PENDING_SYNC_KEY = "emt_pending_sync_v1";
 const PENDING_SYNC_MAX = 200;
 const PROFILE_TABLE = "profiles";
+const LOCAL_DB_NAME = "emt_local_db";
+const LOCAL_DB_VERSION = 1;
+const LOCAL_DB_STORE_KV = "kv";
 
 const pad2 = (n) => String(n).padStart(2, "0");
+
+let localDbOpenPromise = null;
+
+const hasIndexedDb = () => typeof window !== "undefined" && "indexedDB" in window;
+
+const openLocalDb = async () => {
+  if (!hasIndexedDb()) return null;
+  if (localDbOpenPromise) return localDbOpenPromise;
+  localDbOpenPromise = new Promise((resolve, reject) => {
+    const req = window.indexedDB.open(LOCAL_DB_NAME, LOCAL_DB_VERSION);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains(LOCAL_DB_STORE_KV)) {
+        db.createObjectStore(LOCAL_DB_STORE_KV, { keyPath: "k" });
+      }
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error || new Error("IndexedDB open failed"));
+  }).catch((err) => {
+    addDebugLog("localdb.open.error", { message: String(err?.message || "") }, "warn");
+    localDbOpenPromise = Promise.resolve(null);
+    return null;
+  });
+  return localDbOpenPromise;
+};
+
+const localDbGet = async (key) => {
+  try {
+    const db = await openLocalDb();
+    if (!db) return null;
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction(LOCAL_DB_STORE_KV, "readonly");
+      const st = tx.objectStore(LOCAL_DB_STORE_KV);
+      const req = st.get(key);
+      req.onsuccess = () => resolve(req.result?.v ?? null);
+      req.onerror = () => reject(req.error || new Error("IndexedDB get failed"));
+    });
+  } catch (err) {
+    addDebugLog("localdb.get.error", { key, message: String(err?.message || "") }, "warn");
+    return null;
+  }
+};
+
+const localDbSet = async (key, value) => {
+  try {
+    const db = await openLocalDb();
+    if (!db) return false;
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(LOCAL_DB_STORE_KV, "readwrite");
+      const st = tx.objectStore(LOCAL_DB_STORE_KV);
+      st.put({ k: key, v: value, updatedAt: new Date().toISOString() });
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error || new Error("IndexedDB set failed"));
+      tx.onabort = () => reject(tx.error || new Error("IndexedDB set aborted"));
+    });
+    return true;
+  } catch (err) {
+    addDebugLog("localdb.set.error", { key, message: String(err?.message || "") }, "warn");
+    return false;
+  }
+};
+
+const localDbRemove = async (key) => {
+  try {
+    const db = await openLocalDb();
+    if (!db) return false;
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(LOCAL_DB_STORE_KV, "readwrite");
+      const st = tx.objectStore(LOCAL_DB_STORE_KV);
+      st.delete(key);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error || new Error("IndexedDB remove failed"));
+      tx.onabort = () => reject(tx.error || new Error("IndexedDB remove aborted"));
+    });
+    return true;
+  } catch (err) {
+    addDebugLog("localdb.remove.error", { key, message: String(err?.message || "") }, "warn");
+    return false;
+  }
+};
+
+const pendingQueueKey = () => `pendingQueue:${state.user?.id || "guest"}`;
+const snapshotKey = () => `snapshot:${state.user?.id || "guest"}`;
+
+const persistPendingQueueAsync = () => {
+  const payload = Array.isArray(state.pendingQueueCache) ? state.pendingQueueCache.slice(-PENDING_SYNC_MAX) : [];
+  localDbSet(pendingQueueKey(), payload).catch(() => {});
+};
+
+const loadPendingQueueCache = async () => {
+  const owner = state.user?.id || "guest";
+  if (state.pendingQueueOwner !== owner) {
+    state.pendingQueueCache = [];
+    state.pendingQueueOwner = owner;
+  }
+  if (!state.pendingQueueCache || !state.pendingQueueCache.length) {
+    const cached = await localDbGet(pendingQueueKey());
+    if (Array.isArray(cached)) {
+      state.pendingQueueCache = cached;
+      addDebugLog("pending.cache.loaded", { count: cached.length });
+      return;
+    }
+    // one-time fallback migration from legacy localStorage queue
+    try {
+      const legacyRaw = localStorage.getItem(PENDING_SYNC_KEY);
+      if (legacyRaw) {
+        const legacyParsed = JSON.parse(legacyRaw);
+        if (Array.isArray(legacyParsed) && legacyParsed.length) {
+          state.pendingQueueCache = legacyParsed.slice(-PENDING_SYNC_MAX);
+          persistPendingQueueAsync();
+          localStorage.removeItem(PENDING_SYNC_KEY);
+          addDebugLog("pending.cache.migrated", { count: state.pendingQueueCache.length });
+          return;
+        }
+      }
+    } catch {
+      // ignore migration failure
+    }
+  }
+  state.pendingQueueCache = Array.isArray(state.pendingQueueCache) ? state.pendingQueueCache : [];
+};
+
+const saveSnapshotToLocal = async () => {
+  if (!state.user) return;
+  const payload = {
+    session: state.session || null,
+    rows: Array.isArray(state.rows) ? state.rows : [],
+    savedAt: new Date().toISOString()
+  };
+  await localDbSet(snapshotKey(), payload);
+};
+
+const loadSnapshotFromLocal = async () => {
+  if (!state.user) return false;
+  const cached = await localDbGet(snapshotKey());
+  if (!cached || typeof cached !== "object") return false;
+  state.session = cached.session || null;
+  state.rows = Array.isArray(cached.rows) ? cached.rows : [];
+  addDebugLog("snapshot.loaded", { rows: state.rows.length, hasSession: Boolean(state.session) });
+  return true;
+};
 
 const toBuildStamp = (date = new Date()) => {
   const yy = String(date.getFullYear()).slice(-2);
@@ -327,22 +475,16 @@ const exportDebugLogsText = () => {
 };
 
 const readPendingQueue = () => {
-  try {
-    const raw = localStorage.getItem(PENDING_SYNC_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
+  if (!Array.isArray(state.pendingQueueCache)) {
+    state.pendingQueueCache = [];
   }
+  return state.pendingQueueCache;
 };
 
 const writePendingQueue = (items) => {
-  try {
-    localStorage.setItem(PENDING_SYNC_KEY, JSON.stringify(items.slice(-PENDING_SYNC_MAX)));
-  } catch {
-    // ignore
-  }
+  state.pendingQueueOwner = state.user?.id || "guest";
+  state.pendingQueueCache = Array.isArray(items) ? items.slice(-PENDING_SYNC_MAX) : [];
+  persistPendingQueueAsync();
 };
 
 const updatePendingStatusUI = () => {
@@ -369,7 +511,32 @@ const enqueuePendingItem = (item) => {
   if (row.type === "dispatch_update" && row.rowId) {
     const filtered = current.filter((x) => !(x.type === "dispatch_update" && x.rowId === row.rowId));
     writePendingQueue([...filtered, row]);
+  } else if (row.type === "session_update" && row.sessionId) {
+    const filtered = current.filter((x) => !(x.type === "session_update" && x.sessionId === row.sessionId));
+    writePendingQueue([...filtered, row]);
   } else if (row.type === "dispatch_insert") {
+    const rowTimeMs = new Date(row.payload?.dispatch_time || "").getTime();
+    const rowSegment = parseNote(row.payload?.note).segment || "event";
+    const rowSessionId = String(row.payload?.session_id || "");
+    const hasNearDuplicate = current.some((x) => {
+      if (x.type !== "dispatch_insert") return false;
+      const xSessionId = String(x.payload?.session_id || "");
+      if (xSessionId !== rowSessionId) return false;
+      const xSegment = parseNote(x.payload?.note).segment || "event";
+      if (xSegment !== rowSegment) return false;
+      const xTimeMs = new Date(x.payload?.dispatch_time || "").getTime();
+      if (!Number.isFinite(rowTimeMs) || !Number.isFinite(xTimeMs)) return false;
+      return Math.abs(rowTimeMs - xTimeMs) <= 20 * 1000;
+    });
+    if (hasNearDuplicate) {
+      addDebugLog("pending.enqueue.skip_near_duplicate", {
+        type: row.type,
+        segment: rowSegment,
+        sessionId: rowSessionId
+      });
+      return null;
+    }
+
     const key = [
       row.payload?.session_id || "",
       row.payload?.dispatch_time || "",
@@ -400,7 +567,7 @@ const enqueuePendingItem = (item) => {
     });
     if (exists) {
       addDebugLog("pending.enqueue.skip_duplicate", { type: row.type });
-      return;
+      return null;
     }
     writePendingQueue([...current, row]);
   } else {
@@ -408,6 +575,7 @@ const enqueuePendingItem = (item) => {
   }
   updatePendingStatusUI();
   addDebugLog("pending.enqueue", { type: row.type, rowId: row.rowId || null });
+  return row.id;
 };
 
 const removePendingItem = (id) => {
@@ -419,6 +587,63 @@ const updatePendingItem = (id, patch) => {
   const next = readPendingQueue().map((x) => (x.id === id ? { ...x, ...patch } : x));
   writePendingQueue(next);
   updatePendingStatusUI();
+};
+
+const isLocalRowId = (id) => typeof id === "string" && id.startsWith("local_");
+
+const makeLocalRowId = () => `local_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+
+const getPendingInsertByLocalRowId = (localRowId) =>
+  readPendingQueue().find((x) => x.type === "dispatch_insert" && x.localRowId === localRowId) || null;
+
+const updatePendingInsertPayloadByLocalRowId = (localRowId, patchPayload) => {
+  const item = getPendingInsertByLocalRowId(localRowId);
+  if (!item) return false;
+  const nextPayload = { ...(item.payload || {}), ...(patchPayload || {}) };
+  updatePendingItem(item.id, { payload: nextPayload });
+  return true;
+};
+
+const removePendingInsertByLocalRowId = (localRowId) => {
+  const item = getPendingInsertByLocalRowId(localRowId);
+  if (!item) return false;
+  removePendingItem(item.id);
+  return true;
+};
+
+const upsertLocalRowFromPayload = (rowId, payload) => {
+  const idx = state.rows.findIndex((r) => String(r.id) === String(rowId));
+  const merged = {
+    ...(idx >= 0 ? state.rows[idx] : {}),
+    ...payload,
+    id: rowId
+  };
+  if (idx >= 0) {
+    state.rows.splice(idx, 1, merged);
+  } else {
+    state.rows.push(merged);
+  }
+  state.rows.sort((a, b) => new Date(a.dispatch_time) - new Date(b.dispatch_time));
+};
+
+const applyLocalUiAfterMutation = () => {
+  renderTimeline();
+  renderAuth();
+  updatePendingStatusUI();
+  if (state.summaryRange === "today" && state.session) {
+    setSummaryValues(summarizeSessionRows(state.session, state.rows || []));
+  } else {
+    renderSummary().catch(() => {});
+  }
+  saveSnapshotToLocal().catch(() => {});
+};
+
+const acquireActionLock = (key, ms = 1200) => {
+  const now = Date.now();
+  const until = Number(state.actionLocks?.[key] || 0);
+  if (until > now) return false;
+  state.actionLocks[key] = now + ms;
+  return true;
 };
 
 const setSyncing = (on, text = "資料同步中...") => {
@@ -552,10 +777,12 @@ const dbQuery = async (queryFactory, options = {}) => {
 
 const processPendingQueue = async () => {
   if (!state.user || state.processingPendingQueue || state.busy) return;
+  await loadPendingQueueCache();
   const items = readPendingQueue();
   if (!items.length) return;
   state.processingPendingQueue = true;
   addDebugLog("pending.process.start", { count: items.length });
+  let hadSuccess = false;
   try {
     for (const item of items) {
       try {
@@ -576,11 +803,42 @@ const processPendingQueue = async () => {
           if (error) throw error;
         } else if (item.type === "dispatch_insert") {
           await insertDispatch(item.payload, "待同步補送");
+        } else if (item.type === "dispatch_delete") {
+          const { error } = await dbQuery(
+            (signal) =>
+              supabaseClient
+                .from("duty_dispatches")
+                .delete()
+                .eq("id", item.rowId)
+                .abortSignal(signal),
+            {
+              label: "待同步補送：刪除勤務明細",
+              attempts: PENDING_SYNC_ATTEMPTS,
+              timeoutMs: PENDING_SYNC_TIMEOUT_MS
+            }
+          );
+          if (error) throw error;
+        } else if (item.type === "session_update") {
+          const { error } = await dbQuery(
+            (signal) =>
+              supabaseClient
+                .from("duty_sessions")
+                .update(item.payload)
+                .eq("id", item.sessionId)
+                .abortSignal(signal),
+            {
+              label: "待同步補送：更新勤務主單",
+              attempts: PENDING_SYNC_ATTEMPTS,
+              timeoutMs: PENDING_SYNC_TIMEOUT_MS
+            }
+          );
+          if (error) throw error;
         } else {
           removePendingItem(item.id);
           continue;
         }
         removePendingItem(item.id);
+        hadSuccess = true;
         addDebugLog("pending.process.success", { id: item.id, type: item.type });
       } catch (err) {
         updatePendingItem(item.id, {
@@ -594,6 +852,13 @@ const processPendingQueue = async () => {
           "warn"
         );
         break;
+      }
+    }
+    if (hadSuccess && !state.busy) {
+      try {
+        await refresh({ showLoading: false, deferSummary: true });
+      } catch {
+        // ignore refresh failure here; queue processing already succeeded partially
       }
     }
   } finally {
@@ -893,6 +1158,47 @@ const insertDispatch = async (payload, retryTextPrefix = "新增勤務明細同�
   throw new Error("序號衝突過多，請重試。");
 };
 
+const applyPendingMutationsToState = async () => {
+  if (!state.session) return;
+  await loadPendingQueueCache();
+  const items = readPendingQueue();
+  if (!items.length) return;
+
+  let rows = Array.isArray(state.rows) ? [...state.rows] : [];
+  for (const item of items) {
+    if (item.type === "dispatch_delete" && item.rowId) {
+      rows = rows.filter((r) => String(r.id) !== String(item.rowId));
+      continue;
+    }
+    if (item.type === "dispatch_update" && item.rowId && item.payload) {
+      rows = rows.map((r) => (String(r.id) === String(item.rowId) ? { ...r, ...item.payload } : r));
+      continue;
+    }
+    if (item.type === "dispatch_insert" && item.payload) {
+      if (String(item.payload.session_id || "") !== String(state.session.id)) continue;
+      const exists = rows.some(
+        (r) =>
+          (item.localRowId && String(r.id) === String(item.localRowId)) ||
+          isSameDispatchPayload(r, item.payload)
+      );
+      if (!exists) {
+        rows.push({
+          id: item.localRowId || `pending_${item.id}`,
+          ...item.payload
+        });
+      }
+      continue;
+    }
+    if (item.type === "session_update" && item.sessionId && item.payload) {
+      if (String(item.sessionId) === String(state.session.id)) {
+        state.session = { ...state.session, ...item.payload };
+      }
+    }
+  }
+  rows.sort((a, b) => new Date(a.dispatch_time) - new Date(b.dispatch_time));
+  state.rows = rows;
+};
+
 const loadSessionAndRows = async () => {
   if (!state.user) return;
   const { startIso, endIso } = dayBounds();
@@ -914,6 +1220,7 @@ const loadSessionAndRows = async () => {
   state.session = sessions && sessions.length ? sessions[0] : null;
   if (!state.session) {
     state.rows = [];
+    saveSnapshotToLocal().catch(() => {});
     return;
   }
 
@@ -929,7 +1236,9 @@ const loadSessionAndRows = async () => {
   );
   if (rowErr) throw rowErr;
   state.rows = rows || [];
+  await applyPendingMutationsToState();
   await autoHealConsecutiveStandbyRows();
+  saveSnapshotToLocal().catch(() => {});
 };
 
 const mergeStandbyMemoText = (leftMemo, rightMemo) => {
@@ -1701,25 +2010,24 @@ const toggleTimelineEditMode = () => {
 };
 
 const deleteDispatchRow = async (rowId) => {
-  if (!state.user || !Number.isFinite(rowId) || state.busy) return;
-  const row = (state.rows || []).find((x) => x.id === rowId);
+  if (!state.user || rowId === undefined || rowId === null || state.busy) return;
+  if (!acquireActionLock(`deleteDispatchRow:${String(rowId)}`, 1500)) {
+    addDebugLog("action.lock.blocked", { action: "deleteDispatchRow", rowId: String(rowId) }, "warn");
+    return;
+  }
+  const row = (state.rows || []).find((x) => String(x.id) === String(rowId));
   if (!row) return;
   const ok = window.confirm("確認刪除這筆紀錄？");
   if (!ok) return;
-  try {
-    setSyncing(true, "刪除紀錄中...");
-    const { error } = await dbQuery(
-      (signal) => supabaseClient.from("duty_dispatches").delete().eq("id", rowId).abortSignal(signal),
-      { label: "刪除勤務明細", attempts: DB_WRITE_ATTEMPTS, timeoutMs: DB_WRITE_TIMEOUT_MS }
-    );
-    if (error) throw error;
-    await refresh();
-    setHint(el.sessionStatus, "已刪除 1 筆紀錄。");
-  } catch (err) {
-    setHint(el.sessionStatus, `刪除失敗：${err.message}`);
-  } finally {
-    setSyncing(false);
+  if (isLocalRowId(row.id)) {
+    removePendingInsertByLocalRowId(row.id);
+  } else {
+    enqueuePendingItem({ type: "dispatch_delete", rowId: row.id });
   }
+  state.rows = (state.rows || []).filter((x) => String(x.id) !== String(row.id));
+  applyLocalUiAfterMutation();
+  setHint(el.sessionStatus, "已本機刪除，背景同步中。");
+  processPendingQueue().catch(() => {});
 };
 
 const renderAuth = () => {
@@ -1870,6 +2178,10 @@ const startShift = async (e) => {
 const startEvent = async () => {
   if (actionMode() !== "standby") return;
   if (state.busy) return;
+  if (!acquireActionLock("startEvent", 2500)) {
+    addDebugLog("action.lock.blocked", { action: "startEvent" }, "warn");
+    return;
+  }
   if (!state.session || state.session.status !== "active") return;
   const last = latestRow();
   if (last && !isStandby(last)) return;
@@ -1892,23 +2204,23 @@ const startEvent = async () => {
     note: encodeNote({ segment: "event", transported: false, memo: "", open: true })
   };
 
-  try {
-    setSyncing(true, "開始出勤同步中...");
-    setModeOverride("event");
-    await insertDispatch(eventPayload, "開始出勤同步中");
-    await refresh();
-  } catch (err) {
-    if (isRetryableDbError(err)) {
-      enqueuePendingItem({ type: "dispatch_insert", payload: eventPayload });
-      setHint(el.sessionStatus, "開始出勤暫時失敗，已加入待同步。");
-      processPendingQueue().catch(() => {});
-      return;
-    }
-    setHint(el.sessionStatus, `開始出勤失敗：${err.message}`);
-  } finally {
+  setModeOverride("event");
+  const localRowId = makeLocalRowId();
+  const opId = enqueuePendingItem({ type: "dispatch_insert", payload: eventPayload, localRowId });
+  if (!opId) {
+    setHint(el.sessionStatus, "此出勤已在待同步佇列。");
     setModeOverride(null);
-    setSyncing(false);
+    return;
   }
+  upsertLocalRowFromPayload(localRowId, {
+    id: localRowId,
+    ...eventPayload,
+    seq_no: Number(await nextSeq())
+  });
+  applyLocalUiAfterMutation();
+  setModeOverride(null);
+  setHint(el.sessionStatus, "已本機建立出勤，背景同步中。");
+  processPendingQueue().catch(() => {});
 };
 
 const openEventSheet = () => {
@@ -1953,7 +2265,7 @@ const openEventSheetByRowId = (rowId) => {
   setHint(el.eventStatus, "");
   setEventSheetMode("edit");
   const isActiveLast =
-    state.session?.status === "active" && latestRow() && Number(latestRow().id) === Number(row.id);
+    state.session?.status === "active" && latestRow() && String(latestRow().id) === String(row.id);
   if (isActiveLast) {
     el.eventFinishTime.disabled = true;
     if (el.fillEventNowBtn) el.fillEventNowBtn.disabled = true;
@@ -1994,6 +2306,10 @@ const finishEvent = async (e) => {
   e.preventDefault();
   if (state.eventSheetMode !== "final") return;
   if (state.busy) return;
+  if (!acquireActionLock("finishEvent", 3000)) {
+    addDebugLog("action.lock.blocked", { action: "finishEvent" }, "warn");
+    return;
+  }
   const rowId = state.editRowId || latestRow()?.id;
   const row = state.rows.find((r) => r.id === rowId);
   if (!row || isStandby(row)) return;
@@ -2006,56 +2322,41 @@ const finishEvent = async (e) => {
   // Temporarily disabled by request:
   // allow finish time earlier than start time during field operations.
 
-  try {
-    setSyncing(true, "結束出勤同步中...");
-    setModeOverride("standby");
+  setModeOverride("standby");
+  const payload = buildEventUpdatePayload(false);
+  const noteOpen = parseNote(row.note).open === true;
 
-    const payload = buildEventUpdatePayload(false);
-    const { error: upErr } = await dbQuery(
-      (signal) => supabaseClient.from("duty_dispatches").update(payload).eq("id", row.id).abortSignal(signal),
-      {
-        label: "更新出勤紀錄",
-        attempts: DB_WRITE_ATTEMPTS,
-        timeoutMs: DB_WRITE_TIMEOUT_MS,
-        onRetryText: (n, total) => `結束出勤同步中（重試 ${n}/${total}）...`
-      }
-    );
-    if (upErr) throw upErr;
-
-    const standbyIso = resolveStandbyInsertIso(row, finish);
-    if (state.editRowIsOpen) {
-      await insertDispatch(standbyPayload(state.session.id, standbyIso), "結束出勤同步中");
+  if (noteOpen) {
+    if (isLocalRowId(row.id)) {
+      updatePendingInsertPayloadByLocalRowId(row.id, payload);
+    } else {
+      enqueuePendingItem({ type: "dispatch_update", rowId: row.id, payload });
     }
-    closeEventSheet(true);
-    await refresh();
-  } catch (err) {
-    if (isRetryableDbError(err)) {
-      const payload = buildEventUpdatePayload(false);
-      const noteOpen = parseNote(row.note).open === true;
-      if (noteOpen) {
-        enqueuePendingItem({ type: "dispatch_update", rowId: row.id, payload });
-      }
-      const standbyIso = resolveStandbyInsertIso(row, finish);
-      if (state.editRowIsOpen) {
-        enqueuePendingItem({
-          type: "dispatch_insert",
-          payload: standbyPayload(state.session.id, standbyIso)
-        });
-      }
-      updatePendingStatusUI();
-      setHint(el.eventStatus, "網路不穩，已改為待同步，恢復後會自動補送。");
-      return;
-    }
-    setHint(el.eventStatus, `結束出勤失敗：${err.message}`);
-  } finally {
-    setModeOverride(null);
-    setSyncing(false);
+    upsertLocalRowFromPayload(row.id, { ...row, ...payload });
   }
+
+  const standbyIso = resolveStandbyInsertIso(row, finish);
+  if (state.editRowIsOpen) {
+    const standbyRowId = makeLocalRowId();
+    const sp = standbyPayload(state.session.id, standbyIso);
+    enqueuePendingItem({ type: "dispatch_insert", payload: sp, localRowId: standbyRowId });
+    upsertLocalRowFromPayload(standbyRowId, { id: standbyRowId, ...sp, seq_no: Number(await nextSeq()) });
+  }
+
+  closeEventSheet(true);
+  applyLocalUiAfterMutation();
+  setModeOverride(null);
+  setHint(el.sessionStatus, "已本機結束出勤，背景同步中。");
+  processPendingQueue().catch(() => {});
 };
 
 const saveEventDraft = async () => {
   if (state.eventSheetMode !== "edit") return;
   if (state.busy) return;
+  if (!acquireActionLock("saveEventDraft", 1500)) {
+    addDebugLog("action.lock.blocked", { action: "saveEventDraft" }, "warn");
+    return;
+  }
   const rowId = state.editRowId || latestRow()?.id;
   const row = state.rows.find((r) => r.id === rowId);
   if (!row || !state.session) return;
@@ -2122,74 +2423,46 @@ const saveEventDraft = async () => {
     }
   }
 
-  try {
-    setSyncing(true, "暫存同步中...");
-    setHint(el.eventStatus, "儲存中...");
-    const basePayload = state.editRowIsStandby ? {} : buildEventUpdatePayload(state.editRowIsOpen);
-    const payload = {
-      ...basePayload,
-      dispatch_time: new Date(startMs).toISOString()
-    };
-    const { error: upErr } = await dbQuery(
-      (signal) => supabaseClient.from("duty_dispatches").update(payload).eq("id", row.id).abortSignal(signal),
-      {
-        label: "暫存出勤紀錄",
-        attempts: DRAFT_WRITE_ATTEMPTS,
-        timeoutMs: DRAFT_WRITE_TIMEOUT_MS,
-        onRetryText: (n, total) => `暫存同步中（重試 ${n}/${total}）...`
-      }
-    );
-    if (upErr) throw upErr;
+  const basePayload = state.editRowIsStandby ? {} : buildEventUpdatePayload(state.editRowIsOpen);
+  const payload = {
+    ...basePayload,
+    dispatch_time: new Date(startMs).toISOString()
+  };
 
-    if (nextRow) {
-      const { error: nextErr } = await dbQuery(
-        (signal) =>
-          supabaseClient
-            .from("duty_dispatches")
-            .update({ dispatch_time: new Date(endMs).toISOString() })
-            .eq("id", nextRow.id)
-            .abortSignal(signal),
-        {
-          label: "調整相鄰起始時間",
-          attempts: DRAFT_WRITE_ATTEMPTS,
-          timeoutMs: DRAFT_WRITE_TIMEOUT_MS
-        }
-      );
-      if (nextErr) throw nextErr;
-    } else if (state.session.status === "completed") {
-      const { error: sesErr } = await dbQuery(
-        (signal) =>
-          supabaseClient
-            .from("duty_sessions")
-            .update({ end_time: new Date(endMs).toISOString() })
-            .eq("id", state.session.id)
-            .abortSignal(signal),
-        {
-          label: "調整勤務結束時間",
-          attempts: DRAFT_WRITE_ATTEMPTS,
-          timeoutMs: DRAFT_WRITE_TIMEOUT_MS
-        }
-      );
-      if (sesErr) throw sesErr;
-    }
-
-    await refresh();
-    closeEventSheet(true);
-    setHint(el.sessionStatus, "草稿已儲存。");
-  } catch (err) {
-    if (isRetryableDbError(err)) {
-      setHint(el.eventStatus, "網路不穩，這次包含時間重排，請稍後再試。");
-      return;
-    }
-    setHint(el.eventStatus, `草稿儲存失敗：${err.message}`);
-  } finally {
-    setSyncing(false);
+  if (isLocalRowId(row.id)) {
+    updatePendingInsertPayloadByLocalRowId(row.id, payload);
+  } else {
+    enqueuePendingItem({ type: "dispatch_update", rowId: row.id, payload });
   }
+  upsertLocalRowFromPayload(row.id, { ...row, ...payload });
+
+  if (nextRow) {
+    const nextPayload = { dispatch_time: new Date(endMs).toISOString() };
+    if (isLocalRowId(nextRow.id)) {
+      updatePendingInsertPayloadByLocalRowId(nextRow.id, nextPayload);
+    } else {
+      enqueuePendingItem({ type: "dispatch_update", rowId: nextRow.id, payload: nextPayload });
+    }
+    upsertLocalRowFromPayload(nextRow.id, { ...nextRow, ...nextPayload });
+  } else if (state.session.status === "completed") {
+    const sessionPayload = { end_time: new Date(endMs).toISOString() };
+    enqueuePendingItem({ type: "session_update", sessionId: state.session.id, payload: sessionPayload });
+    state.session = { ...state.session, ...sessionPayload };
+  }
+
+  closeEventSheet(true);
+  applyLocalUiAfterMutation();
+  setHint(el.sessionStatus, "已本機存檔，背景同步中。");
+  processPendingQueue().catch(() => {});
 };
 
 const checkout = async () => {
   if (actionMode() !== "standby") return;
   if (state.busy) return;
+  if (!acquireActionLock("checkout", 4000)) {
+    addDebugLog("action.lock.blocked", { action: "checkout" }, "warn");
+    return;
+  }
   if (!state.session || state.session.status !== "active") return;
   const last = latestRow();
   if (last && !isStandby(last)) {
@@ -2199,50 +2472,30 @@ const checkout = async () => {
   const ok = window.confirm("確認退勤？");
   if (!ok) return;
 
-  try {
-    setSyncing(true, "退勤同步中...");
-    setModeOverride("none");
-    const now = new Date().toISOString();
-    if (last && isStandby(last)) {
-      const standbyNote = parseNote(last.note);
-      const memo = String(standbyNote.memo || "").trim();
-      const nextMemo = memo.includes("退勤") ? memo : memo ? `${memo} / 退勤` : "退勤";
-      const notePayload = encodeNote({ ...standbyNote, memo: nextMemo });
-      const { error: noteErr } = await dbQuery(
-        (signal) =>
-          supabaseClient.from("duty_dispatches").update({ note: notePayload }).eq("id", last.id).abortSignal(signal),
-        {
-          label: "更新待勤註記",
-          attempts: DB_WRITE_ATTEMPTS,
-          timeoutMs: DB_WRITE_TIMEOUT_MS,
-          onRetryText: (n, total) => `退勤同步中（待勤註記重試 ${n}/${total}）...`
-        }
-      );
-      if (noteErr) throw noteErr;
+  setModeOverride("none");
+  const now = new Date().toISOString();
+  if (last && isStandby(last)) {
+    const standbyNote = parseNote(last.note);
+    const memo = String(standbyNote.memo || "").trim();
+    const nextMemo = memo.includes("退勤") ? memo : memo ? `${memo} / 退勤` : "退勤";
+    const notePayload = encodeNote({ ...standbyNote, memo: nextMemo });
+    if (isLocalRowId(last.id)) {
+      updatePendingInsertPayloadByLocalRowId(last.id, { note: notePayload });
+    } else {
+      enqueuePendingItem({ type: "dispatch_update", rowId: last.id, payload: { note: notePayload } });
     }
-    const { error } = await dbQuery(
-      (signal) =>
-        supabaseClient
-          .from("duty_sessions")
-          .update({ end_time: now, status: "completed" })
-          .eq("id", state.session.id)
-          .abortSignal(signal),
-      {
-        label: "退勤更新",
-        attempts: DB_WRITE_ATTEMPTS,
-        timeoutMs: DB_WRITE_TIMEOUT_MS,
-        onRetryText: (n, total) => `退勤同步中（重試 ${n}/${total}）...`
-      }
-    );
-    if (error) throw error;
-    await refresh();
-    setHint(el.sessionStatus, "退勤完成。");
-  } catch (err) {
-    setHint(el.sessionStatus, `退勤失敗：${err.message}`);
-  } finally {
-    setModeOverride(null);
-    setSyncing(false);
+    upsertLocalRowFromPayload(last.id, { ...last, note: notePayload });
   }
+  enqueuePendingItem({
+    type: "session_update",
+    sessionId: state.session.id,
+    payload: { end_time: now, status: "completed" }
+  });
+  state.session = { ...state.session, end_time: now, status: "completed" };
+  applyLocalUiAfterMutation();
+  setModeOverride(null);
+  setHint(el.sessionStatus, "退勤已本機完成，背景同步中。");
+  processPendingQueue().catch(() => {});
 };
 
 const deleteTodayRecords = async () => {
@@ -2321,6 +2574,7 @@ const clearSignedOutState = () => {
   state.user = null;
   state.session = null;
   state.rows = [];
+  state.pendingQueueCache = [];
   state.profile = { displayName: "", unit: "", title: "", phone: "", avatarDataUrl: "" };
   state.timelineEditMode = false;
   closeEventSheet(true);
@@ -2576,21 +2830,21 @@ const bind = () => {
   el.timelineList.addEventListener("click", (event) => {
     const actionBtn = event.target.closest(".row-action-btn");
     if (actionBtn) {
-      const rowId = Number(actionBtn.dataset.rowId);
-      if (!Number.isFinite(rowId)) return;
+      const rowId = actionBtn.dataset.rowId;
+      if (!rowId) return;
       if (actionBtn.dataset.action === "delete") {
         deleteDispatchRow(rowId);
         return;
       }
-      const row = (state.rows || []).find((x) => x.id === rowId);
+      const row = (state.rows || []).find((x) => String(x.id) === String(rowId));
       if (!row) return;
       openEventSheetByRowId(rowId);
       return;
     }
     const target = event.target.closest(".item.editable");
     if (!target) return;
-    const rowId = Number(target.dataset.rowId);
-    if (!Number.isFinite(rowId)) return;
+    const rowId = target.dataset.rowId;
+    if (!rowId) return;
     openEventSheetByRowId(rowId);
   });
   if (el.loadHistoryBtn) {
@@ -2672,6 +2926,7 @@ const initAuth = async () => {
       await renderSummary();
       return;
     }
+    await loadPendingQueueCache();
 
     // Switch to work view immediately; load data in background.
     renderAuth();
@@ -2725,7 +2980,18 @@ const initAuth = async () => {
 
   state.user = authData?.session?.user || state.user || null;
   hadSessionFromGetSession = Boolean(authData?.session || state.user);
+  await loadPendingQueueCache();
   renderAuth();
+  if (state.user) {
+    const hasSnapshot = await loadSnapshotFromLocal();
+    if (hasSnapshot) {
+      renderTimeline();
+      renderAuth();
+      if (state.summaryRange === "today") {
+        setSummaryValues(summarizeSessionRows(state.session, state.rows || []));
+      }
+    }
+  }
   authBootstrapDone = true;
   const initialProfileTask = state.user
     ? loadProfile()
@@ -2761,6 +3027,7 @@ const initAuth = async () => {
 const init = async () => {
   addDebugLog("init.start", { href: window.location.href });
   applyFooterVersion();
+  await openLocalDb();
   window.addEventListener("online", async () => {
     addDebugLog("network.online");
     await processPendingQueue();
