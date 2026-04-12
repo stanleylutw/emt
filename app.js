@@ -509,12 +509,14 @@ const enqueuePendingItem = (item) => {
   };
   // update row payload should overwrite old pending update for same row
   if (row.type === "dispatch_update" && row.rowId) {
+    row.payload = normalizeDispatchPayloadForDb(row.payload);
     const filtered = current.filter((x) => !(x.type === "dispatch_update" && x.rowId === row.rowId));
     writePendingQueue([...filtered, row]);
   } else if (row.type === "session_update" && row.sessionId) {
     const filtered = current.filter((x) => !(x.type === "session_update" && x.sessionId === row.sessionId));
     writePendingQueue([...filtered, row]);
   } else if (row.type === "dispatch_insert") {
+    row.payload = normalizeDispatchPayloadForDb(row.payload);
     const rowTimeMs = new Date(row.payload?.dispatch_time || "").getTime();
     const rowSegment = parseNote(row.payload?.note).segment || "event";
     const rowSessionId = String(row.payload?.session_id || "");
@@ -587,6 +589,52 @@ const updatePendingItem = (id, patch) => {
   const next = readPendingQueue().map((x) => (x.id === id ? { ...x, ...patch } : x));
   writePendingQueue(next);
   updatePendingStatusUI();
+};
+
+const normalizeDispatchPayloadForDb = (payload) => {
+  if (!payload || typeof payload !== "object") return payload;
+  const next = { ...payload };
+  const rawCount = String(next.patient_count ?? "").trim();
+  const rawCustom = String(next.patient_count_custom ?? "").trim();
+  const allowed = new Set(["1", "2", "其他"]);
+
+  if (rawCount === "0") {
+    next.patient_count = "其他";
+    next.patient_count_custom = rawCustom || "0";
+    return next;
+  }
+
+  if (allowed.has(rawCount)) {
+    if (rawCount !== "其他") {
+      next.patient_count_custom = null;
+    } else if (!rawCustom) {
+      next.patient_count_custom = "1";
+    }
+    return next;
+  }
+
+  const asNum = Number(rawCount);
+  if (Number.isFinite(asNum)) {
+    if (asNum <= 0) {
+      next.patient_count = "其他";
+      next.patient_count_custom = rawCustom || "0";
+      return next;
+    }
+    if (asNum === 1) {
+      next.patient_count = "1";
+      next.patient_count_custom = null;
+      return next;
+    }
+    if (asNum >= 2) {
+      next.patient_count = "2";
+      next.patient_count_custom = null;
+      return next;
+    }
+  }
+
+  next.patient_count = "1";
+  next.patient_count_custom = null;
+  return next;
 };
 
 const isLocalRowId = (id) => typeof id === "string" && id.startsWith("local_");
@@ -787,11 +835,15 @@ const processPendingQueue = async () => {
     for (const item of items) {
       try {
         if (item.type === "dispatch_update") {
+          const normalizedPayload = normalizeDispatchPayloadForDb(item.payload || {});
+          if (JSON.stringify(normalizedPayload) !== JSON.stringify(item.payload || {})) {
+            updatePendingItem(item.id, { payload: normalizedPayload });
+          }
           const { error } = await dbQuery(
             (signal) =>
               supabaseClient
                 .from("duty_dispatches")
-                .update(item.payload)
+                .update(normalizedPayload)
                 .eq("id", item.rowId)
                 .abortSignal(signal),
             {
@@ -802,7 +854,11 @@ const processPendingQueue = async () => {
           );
           if (error) throw error;
         } else if (item.type === "dispatch_insert") {
-          await insertDispatch(item.payload, "待同步補送");
+          const normalizedPayload = normalizeDispatchPayloadForDb(item.payload || {});
+          if (JSON.stringify(normalizedPayload) !== JSON.stringify(item.payload || {})) {
+            updatePendingItem(item.id, { payload: normalizedPayload });
+          }
+          await insertDispatch(normalizedPayload, "待同步補送");
         } else if (item.type === "dispatch_delete") {
           const { error } = await dbQuery(
             (signal) =>
@@ -841,14 +897,29 @@ const processPendingQueue = async () => {
         hadSuccess = true;
         addDebugLog("pending.process.success", { id: item.id, type: item.type });
       } catch (err) {
+        const errMsg = String(err?.message || "");
+        const lowerMsg = errMsg.toLowerCase();
+        const isPoisonPayload =
+          lowerMsg.includes("violates check constraint") ||
+          lowerMsg.includes("invalid input syntax") ||
+          lowerMsg.includes("value too long");
+        if (isPoisonPayload) {
+          removePendingItem(item.id);
+          addDebugLog(
+            "pending.process.drop_invalid",
+            { id: item.id, type: item.type, message: errMsg },
+            "warn"
+          );
+          continue;
+        }
         updatePendingItem(item.id, {
           tries: Number(item.tries || 0) + 1,
-          lastError: String(err?.message || "unknown error"),
+          lastError: errMsg || "unknown error",
           lastTriedAt: new Date().toISOString()
         });
         addDebugLog(
           "pending.process.error",
-          { id: item.id, type: item.type, message: String(err?.message || "") },
+          { id: item.id, type: item.type, message: errMsg },
           "warn"
         );
         break;
@@ -1878,7 +1949,9 @@ const buildEventUpdatePayload = (open) => {
   const hospitalValue = el.hospital.value;
   const hospital = hospitalValue === "未送" || hospitalValue === "未選" ? "其他" : hospitalValue;
   const hospitalCustom = hospitalValue === "未送" ? "未送" : hospitalValue === "未選" ? "未選" : null;
-  const patientCountValue = hospitalValue === "未送" ? "0" : el.patientCount.value;
+  const isNoTransport = hospitalValue === "未送";
+  const patientCountValue = isNoTransport ? "其他" : el.patientCount.value;
+  const patientCountCustom = isNoTransport ? "0" : null;
 
   return {
     vehicle: "其他",
@@ -1886,7 +1959,7 @@ const buildEventUpdatePayload = (open) => {
     case_type: el.caseType.value,
     case_type_custom: null,
     patient_count: patientCountValue,
-    patient_count_custom: null,
+    patient_count_custom: patientCountCustom,
     hospital,
     hospital_custom: hospitalCustom,
     chief_complaint: el.chiefComplaint ? el.chiefComplaint.value.trim() : "",
