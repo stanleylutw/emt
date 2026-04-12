@@ -1525,6 +1525,8 @@ const openEventSheet = () => {
   setEventSheetMode("final");
   setHint(el.eventStatus, "");
   el.eventSheet.classList.remove("hidden");
+  const sheetBody = el.eventSheet.querySelector(".sheet-body");
+  if (sheetBody) sheetBody.scrollTop = 0;
 };
 
 const onSecondaryAction = async () => {
@@ -1548,6 +1550,8 @@ const openEventSheetByRowId = (rowId) => {
   setHint(el.eventStatus, "");
   setEventSheetMode("edit");
   el.eventSheet.classList.remove("hidden");
+  const sheetBody = el.eventSheet.querySelector(".sheet-body");
+  if (sheetBody) sheetBody.scrollTop = 0;
 };
 
 const closeEventSheet = (force = false) => {

@@ -609,20 +609,133 @@ button[aria-disabled="true"] {
   display: grid;
   align-items: end;
   z-index: 10;
+  padding-top: env(safe-area-inset-top);
 }
 
 .sheet-body {
   background: #fff;
   border-radius: 16px 16px 0 0;
   max-height: 88vh;
-  overflow: auto;
-  padding: 14px;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  padding: 14px 14px calc(14px + env(safe-area-inset-bottom));
+}
+
+@supports (height: 100dvh) {
+  .sheet-body {
+    max-height: calc(100dvh - env(safe-area-inset-top) - 8px);
+  }
 }
 
 .sheet-actions {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 8px;
+}
+
+#eventSheet .sheet-body {
+  padding: 12px 12px calc(12px + env(safe-area-inset-bottom));
+}
+
+#eventSheet h2 {
+  margin: 2px 0 8px;
+}
+
+#eventSheet .form {
+  gap: 8px;
+}
+
+#eventSheet label {
+  gap: 4px;
+  font-size: 13px;
+}
+
+#eventSheet input,
+#eventSheet select,
+#eventSheet textarea {
+  padding: 8px 9px;
+  border-radius: 10px;
+  font-size: 16px;
+}
+
+#eventSheet #chiefComplaint,
+#eventSheet #memo {
+  min-height: 64px;
+}
+
+#eventSheet .small {
+  padding: 8px 10px;
+  min-width: 64px;
+}
+
+#eventSheet .tri-row {
+  gap: 6px;
+}
+
+#eventSheet .vital-row {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+#eventSheet .equipment-collapsible {
+  border: 1px solid #cde0ea;
+  border-radius: 12px;
+  background: #fbfdff;
+  padding: 8px;
+}
+
+#eventSheet .equipment-collapsible summary {
+  cursor: pointer;
+  list-style: none;
+  color: #476377;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+#eventSheet .equipment-collapsible summary::-webkit-details-marker {
+  display: none;
+}
+
+#eventSheet .equipment-collapsible summary::after {
+  content: "▾";
+  float: right;
+  color: #5f7688;
+}
+
+#eventSheet .equipment-collapsible[open] summary::after {
+  content: "▴";
+}
+
+#eventSheet .equipment-collapsible[open] summary {
+  margin-bottom: 8px;
+}
+
+#eventSheet .equipment-grid {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+#eventSheet .check-line {
+  gap: 5px;
+  padding: 5px 6px;
+  font-size: 12px;
+}
+
+#eventSheet .check-line input {
+  width: 15px;
+  height: 15px;
+}
+
+#eventSheet .sheet-actions {
+  position: sticky;
+  bottom: 0;
+  background: linear-gradient(to top, #fff 76%, rgba(255, 255, 255, 0));
+  padding-top: 8px;
+  margin-top: 2px;
+  z-index: 1;
 }
 
 .debug-actions {

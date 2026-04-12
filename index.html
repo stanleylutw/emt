@@ -145,21 +145,23 @@
             主訴
             <textarea id="chiefComplaint" rows="2" placeholder="可輸入主訴"></textarea>
           </label>
-          <fieldset class="equipment-grid">
-            <legend>使用器材</legend>
-            <label class="check-line"><input type="checkbox" name="equipmentItem" value="血糖" /><span>血糖</span></label>
-            <label class="check-line"><input type="checkbox" name="equipmentItem" value="氧氣" /><span>氧氣</span></label>
-            <label class="check-line"><input type="checkbox" name="equipmentItem" value="傷口處理" /><span>傷口處理</span></label>
-            <label class="check-line"><input type="checkbox" name="equipmentItem" value="IV" /><span>IV</span></label>
-            <label class="check-line"><input type="checkbox" name="equipmentItem" value="AED" /><span>AED</span></label>
-            <label class="check-line"><input type="checkbox" name="equipmentItem" value="BVM" /><span>BVM</span></label>
-            <label class="check-line"><input type="checkbox" name="equipmentItem" value="抽吸器" /><span>抽吸器</span></label>
-            <label class="check-line"><input type="checkbox" name="equipmentItem" value="頸圈" /><span>頸圈</span></label>
-            <label class="check-line"><input type="checkbox" name="equipmentItem" value="長背板" /><span>長背板</span></label>
-            <label class="check-line"><input type="checkbox" name="equipmentItem" value="止血帶" /><span>止血帶</span></label>
-            <label class="check-line"><input type="checkbox" name="equipmentItem" value="紗布敷料" /><span>紗布敷料</span></label>
-            <label class="check-line"><input type="checkbox" name="equipmentItem" value="心電貼片" /><span>心電貼片</span></label>
-          </fieldset>
+          <details class="equipment-collapsible">
+            <summary>使用器材（12 項）</summary>
+            <fieldset class="equipment-grid">
+              <label class="check-line"><input type="checkbox" name="equipmentItem" value="血糖" /><span>血糖</span></label>
+              <label class="check-line"><input type="checkbox" name="equipmentItem" value="氧氣" /><span>氧氣</span></label>
+              <label class="check-line"><input type="checkbox" name="equipmentItem" value="傷口處理" /><span>傷口處理</span></label>
+              <label class="check-line"><input type="checkbox" name="equipmentItem" value="IV" /><span>IV</span></label>
+              <label class="check-line"><input type="checkbox" name="equipmentItem" value="AED" /><span>AED</span></label>
+              <label class="check-line"><input type="checkbox" name="equipmentItem" value="BVM" /><span>BVM</span></label>
+              <label class="check-line"><input type="checkbox" name="equipmentItem" value="抽吸器" /><span>抽吸器</span></label>
+              <label class="check-line"><input type="checkbox" name="equipmentItem" value="頸圈" /><span>頸圈</span></label>
+              <label class="check-line"><input type="checkbox" name="equipmentItem" value="長背板" /><span>長背板</span></label>
+              <label class="check-line"><input type="checkbox" name="equipmentItem" value="止血帶" /><span>止血帶</span></label>
+              <label class="check-line"><input type="checkbox" name="equipmentItem" value="紗布敷料" /><span>紗布敷料</span></label>
+              <label class="check-line"><input type="checkbox" name="equipmentItem" value="心電貼片" /><span>心電貼片</span></label>
+            </fieldset>
+          </details>
           <label>
             備註
             <textarea id="memo" rows="2"></textarea>
