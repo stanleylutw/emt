@@ -25,7 +25,9 @@ const state = {
   profileDraftAvatarDataUrl: "",
   availableHistoryDates: [],
   timelineOrder: "desc",
-  healingStandbyRows: false
+  healingStandbyRows: false,
+  profileLoadPromise: null,
+  refreshPromise: null
 };
 
 const el = {
@@ -540,6 +542,11 @@ const processPendingQueue = async () => {
 };
 
 const loadProfile = async () => {
+  if (state.profileLoadPromise) {
+    addDebugLog("profile.load.join");
+    return state.profileLoadPromise;
+  }
+  const runner = async () => {
   if (!state.user) return;
   try {
     const { data, error } = await dbQuery(
@@ -575,6 +582,16 @@ const loadProfile = async () => {
   const local = readLocalProfile();
   if (local) {
     state.profile = local;
+  }
+  };
+  const task = runner();
+  state.profileLoadPromise = task;
+  try {
+    return await task;
+  } finally {
+    if (state.profileLoadPromise === task) {
+      state.profileLoadPromise = null;
+    }
   }
 };
 
@@ -1488,6 +1505,11 @@ const renderAuth = () => {
 };
 
 const refresh = async (opts = {}) => {
+  if (state.refreshPromise) {
+    addDebugLog("refresh.join");
+    return state.refreshPromise;
+  }
+  const runner = async () => {
   const { showLoading = false, loadingText = "資料載入中...", deferSummary = true } = opts;
   const canShow = showLoading && !state.busy;
   const rfStart = performance.now();
@@ -1528,6 +1550,16 @@ const refresh = async (opts = {}) => {
   } finally {
     if (canShow) {
       setSyncing(false);
+    }
+  }
+  };
+  const task = runner();
+  state.refreshPromise = task;
+  try {
+    return await task;
+  } finally {
+    if (state.refreshPromise === task) {
+      state.refreshPromise = null;
     }
   }
 };
@@ -2217,11 +2249,19 @@ const initAuth = async () => {
   addDebugLog("initAuth.start");
   let firstInitialSessionHandled = false;
   let hadSessionFromGetSession = false;
+  let authBootstrapDone = false;
+  let authStateQueue = Promise.resolve();
 
   const handleAuthStateChange = async (evt, session) => {
     addDebugLog("authState.changed", { evt, hasSession: Boolean(session) });
     const prevUserId = state.user?.id || null;
     const nextUserId = session?.user?.id || null;
+    if (!authBootstrapDone) {
+      state.user = session?.user || state.user || null;
+      renderAuth();
+      addDebugLog("authState.bootstrap.skipHeavy", { evt, hasUser: Boolean(state.user) });
+      return;
+    }
     // Supabase emits INITIAL_SESSION after subscription.
     // Only skip it if we already got a valid session from getSession(),
     // otherwise Safari may stay on login page until user clicks login again.
@@ -2269,9 +2309,11 @@ const initAuth = async () => {
 
   // Register listener first to avoid missing the first OAuth callback event on iOS Safari.
   supabaseClient.auth.onAuthStateChange((evt, session) => {
-    handleAuthStateChange(evt, session).catch((err) => {
-      addDebugLog("authState.handler.error", { message: String(err?.message || "") }, "error");
-    });
+    authStateQueue = authStateQueue
+      .then(() => handleAuthStateChange(evt, session))
+      .catch((err) => {
+        addDebugLog("authState.handler.error", { message: String(err?.message || "") }, "error");
+      });
   });
 
   let authData = null;
@@ -2288,10 +2330,11 @@ const initAuth = async () => {
     authData = null;
   }
 
-  state.user = authData?.session?.user || null;
-  hadSessionFromGetSession = Boolean(authData?.session);
+  state.user = authData?.session?.user || state.user || null;
+  hadSessionFromGetSession = Boolean(authData?.session || state.user);
   await loadProfile();
   renderAuth();
+  authBootstrapDone = true;
   if (state.user) {
     try {
       await refresh({ showLoading: true, loadingText: "資料載入中..." });
