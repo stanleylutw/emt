@@ -636,6 +636,18 @@ button[aria-disabled="true"] {
   justify-content: center;
   gap: 8px;
   min-width: 170px;
+  background: #ffffff;
+  color: #264b5f;
+  border: 1px solid #c8dce8;
+  box-shadow: 0 2px 6px rgba(23, 48, 66, 0.08);
+}
+
+.google-login-btn:hover {
+  background: #f7fbff;
+}
+
+.google-login-btn:active {
+  transform: translateY(1px);
 }
 
 .google-icon {

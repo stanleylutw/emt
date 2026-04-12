@@ -24,7 +24,8 @@ const state = {
   },
   profileDraftAvatarDataUrl: "",
   availableHistoryDates: [],
-  timelineOrder: "desc"
+  timelineOrder: "desc",
+  healingStandbyRows: false
 };
 
 const el = {
@@ -802,6 +803,100 @@ const loadSessionAndRows = async () => {
   );
   if (rowErr) throw rowErr;
   state.rows = rows || [];
+  await autoHealConsecutiveStandbyRows();
+};
+
+const mergeStandbyMemoText = (leftMemo, rightMemo) => {
+  const parts = [
+    ...String(leftMemo || "")
+      .split("/")
+      .map((x) => x.trim())
+      .filter(Boolean),
+    ...String(rightMemo || "")
+      .split("/")
+      .map((x) => x.trim())
+      .filter(Boolean)
+  ];
+  const uniq = [];
+  parts.forEach((p) => {
+    if (!uniq.includes(p)) uniq.push(p);
+  });
+  return uniq.join(" / ");
+};
+
+const autoHealConsecutiveStandbyRows = async () => {
+  if (!state.user || !state.session || state.healingStandbyRows) return;
+  if (!Array.isArray(state.rows) || state.rows.length < 2) return;
+
+  const deleteIds = [];
+  const updateOps = [];
+
+  for (let i = 0; i < state.rows.length - 1; i += 1) {
+    const a = state.rows[i];
+    const b = state.rows[i + 1];
+    if (!isStandby(a) || !isStandby(b)) continue;
+
+    const aNote = parseNote(a.note);
+    const bNote = parseNote(b.note);
+    const mergedMemo = mergeStandbyMemoText(aNote.memo, bNote.memo);
+    const mergedNote = encodeNote({ ...aNote, memo: mergedMemo });
+    if (mergedNote !== String(a.note || "")) {
+      updateOps.push({ id: a.id, note: mergedNote });
+    }
+    deleteIds.push(b.id);
+  }
+
+  if (!deleteIds.length && !updateOps.length) return;
+
+  state.healingStandbyRows = true;
+  addDebugLog("standby.heal.start", {
+    updates: updateOps.length,
+    deletes: deleteIds.length
+  });
+
+  try {
+    for (const op of updateOps) {
+      const { error } = await dbQuery(
+        (signal) => supabaseClient.from("duty_dispatches").update({ note: op.note }).eq("id", op.id).abortSignal(signal),
+        {
+          label: "修復待勤註記",
+          attempts: DB_WRITE_ATTEMPTS,
+          timeoutMs: DB_WRITE_TIMEOUT_MS
+        }
+      );
+      if (error) throw error;
+    }
+
+    if (deleteIds.length) {
+      const { error } = await dbQuery(
+        (signal) => supabaseClient.from("duty_dispatches").delete().in("id", deleteIds).abortSignal(signal),
+        {
+          label: "刪除重複待勤",
+          attempts: DB_WRITE_ATTEMPTS,
+          timeoutMs: DB_WRITE_TIMEOUT_MS
+        }
+      );
+      if (error) throw error;
+    }
+
+    const { data: fixedRows, error: fixedErr } = await dbQuery(
+      (signal) =>
+        supabaseClient
+          .from("duty_dispatches")
+          .select("*")
+          .eq("session_id", state.session.id)
+          .order("dispatch_time", { ascending: true })
+          .abortSignal(signal),
+      { label: "重讀勤務明細（修復後）", attempts: DB_READ_ATTEMPTS, timeoutMs: DB_READ_TIMEOUT_MS }
+    );
+    if (fixedErr) throw fixedErr;
+    state.rows = fixedRows || [];
+    addDebugLog("standby.heal.success", { rows: state.rows.length });
+  } catch (err) {
+    addDebugLog("standby.heal.error", { message: String(err?.message || "") }, "warn");
+  } finally {
+    state.healingStandbyRows = false;
+  }
 };
 
 const transportedUnits = (row) => {
@@ -2121,6 +2216,7 @@ const bind = () => {
 const initAuth = async () => {
   addDebugLog("initAuth.start");
   let firstInitialSessionHandled = false;
+  let hadSessionFromGetSession = false;
   let authData = null;
   try {
     const { data } = await dbQuery(() => supabaseClient.auth.getSession(), {
@@ -2136,6 +2232,7 @@ const initAuth = async () => {
   }
 
   state.user = authData?.session?.user || null;
+  hadSessionFromGetSession = Boolean(authData?.session);
   await loadProfile();
   renderAuth();
   if (state.user) {
@@ -2162,12 +2259,16 @@ const initAuth = async () => {
     addDebugLog("authState.changed", { evt, hasSession: Boolean(session) });
     const prevUserId = state.user?.id || null;
     const nextUserId = session?.user?.id || null;
-    // Supabase emits INITIAL_SESSION after subscription; skip the first one
-    // to avoid duplicate startup refresh and long blocking waits.
+    // Supabase emits INITIAL_SESSION after subscription.
+    // Only skip it if we already got a valid session from getSession(),
+    // otherwise Safari may stay on login page until user clicks login again.
     if (evt === "INITIAL_SESSION" && !firstInitialSessionHandled) {
       firstInitialSessionHandled = true;
-      addDebugLog("authState.initialSession.skipped");
-      return;
+      if (hadSessionFromGetSession) {
+        addDebugLog("authState.initialSession.skipped");
+        return;
+      }
+      addDebugLog("authState.initialSession.processed");
     }
     if (evt === "SIGNED_IN" && prevUserId && prevUserId === nextUserId) {
       addDebugLog("authState.signedIn.sameUser.skipRefresh", { userId: nextUserId });
