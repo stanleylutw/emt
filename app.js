@@ -122,6 +122,7 @@ const DEBUG_LOG_KEY = "emt_debug_logs_v1";
 const DEBUG_LOG_MAX = 300;
 const PENDING_SYNC_KEY = "emt_pending_sync_v1";
 const PENDING_SYNC_MAX = 200;
+const PROFILE_TABLE = "profiles";
 
 const pad2 = (n) => String(n).padStart(2, "0");
 
@@ -201,6 +202,33 @@ const dayBounds = () => {
 };
 
 const profileStorageKey = () => (state.user ? `emt_profile_${state.user.id}` : "");
+
+const readLocalProfile = () => {
+  if (!state.user) return null;
+  try {
+    const raw = localStorage.getItem(profileStorageKey());
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return {
+      displayName: parsed.displayName || "",
+      unit: parsed.unit || "",
+      title: parsed.title || "",
+      phone: parsed.phone || "",
+      avatarDataUrl: parsed.avatarDataUrl || ""
+    };
+  } catch {
+    return null;
+  }
+};
+
+const writeLocalProfile = (profile) => {
+  if (!state.user) return;
+  try {
+    localStorage.setItem(profileStorageKey(), JSON.stringify(profile));
+  } catch {
+    // ignore local cache failure
+  }
+};
 
 const getEffectiveDisplayName = () =>
   state.profile.displayName || state.user?.user_metadata?.full_name || state.user?.email || "使用者";
@@ -507,27 +535,76 @@ const processPendingQueue = async () => {
   }
 };
 
-const loadProfile = () => {
+const loadProfile = async () => {
   if (!state.user) return;
   try {
-    const raw = localStorage.getItem(profileStorageKey());
-    if (!raw) return;
-    const parsed = JSON.parse(raw);
-    state.profile = {
-      displayName: parsed.displayName || "",
-      unit: parsed.unit || "",
-      title: parsed.title || "",
-      phone: parsed.phone || "",
-      avatarDataUrl: parsed.avatarDataUrl || ""
-    };
-  } catch {
-    // ignore broken local data
+    const { data, error } = await dbQuery(
+      (signal) =>
+        supabaseClient
+          .from(PROFILE_TABLE)
+          .select("display_name, unit, title, phone, avatar_data_url")
+          .eq("user_id", state.user.id)
+          .maybeSingle()
+          .abortSignal(signal),
+      { label: "讀取個人資料", attempts: 2, timeoutMs: 8000 }
+    );
+    if (error) throw error;
+    if (data) {
+      state.profile = {
+        displayName: data.display_name || "",
+        unit: data.unit || "",
+        title: data.title || "",
+        phone: data.phone || "",
+        avatarDataUrl: data.avatar_data_url || ""
+      };
+      writeLocalProfile(state.profile);
+      return;
+    }
+  } catch (err) {
+    addDebugLog(
+      "profile.load.remote.error",
+      { code: err?.code || null, message: String(err?.message || "") },
+      "warn"
+    );
+  }
+
+  const local = readLocalProfile();
+  if (local) {
+    state.profile = local;
   }
 };
 
-const saveProfile = () => {
-  if (!state.user) return;
-  localStorage.setItem(profileStorageKey(), JSON.stringify(state.profile));
+const saveProfile = async () => {
+  if (!state.user) return { remote: false };
+  const payload = {
+    user_id: state.user.id,
+    display_name: state.profile.displayName || null,
+    unit: state.profile.unit || null,
+    title: state.profile.title || null,
+    phone: state.profile.phone || null,
+    avatar_data_url: state.profile.avatarDataUrl || null
+  };
+  try {
+    const { error } = await dbQuery(
+      (signal) =>
+        supabaseClient
+          .from(PROFILE_TABLE)
+          .upsert(payload, { onConflict: "user_id" })
+          .abortSignal(signal),
+      { label: "儲存個人資料", attempts: DB_WRITE_ATTEMPTS, timeoutMs: DB_WRITE_TIMEOUT_MS }
+    );
+    if (error) throw error;
+    writeLocalProfile(state.profile);
+    return { remote: true };
+  } catch (err) {
+    addDebugLog(
+      "profile.save.remote.error",
+      { code: err?.code || null, message: String(err?.message || "") },
+      "warn"
+    );
+    writeLocalProfile(state.profile);
+    return { remote: false, error: err };
+  }
 };
 
 const applyProfileToUI = () => {
@@ -1746,7 +1823,7 @@ const onProfileAvatarFileChange = async () => {
   reader.readAsDataURL(file);
 };
 
-const submitProfile = (e) => {
+const submitProfile = async (e) => {
   e.preventDefault();
   state.profile = {
     displayName: el.profileDisplayName.value.trim(),
@@ -1755,9 +1832,9 @@ const submitProfile = (e) => {
     phone: el.profilePhone.value.trim(),
     avatarDataUrl: state.profileDraftAvatarDataUrl || state.profile.avatarDataUrl || ""
   };
-  saveProfile();
+  const result = await saveProfile();
   applyProfileToUI();
-  setHint(el.profileStatus, "已儲存。");
+  setHint(el.profileStatus, result.remote ? "已儲存（雲端同步）。" : "已儲存（本機，雲端稍後再試）。");
   closeProfileSheet();
 };
 
@@ -1906,7 +1983,7 @@ const initAuth = async () => {
   }
 
   state.user = authData?.session?.user || null;
-  loadProfile();
+  await loadProfile();
   renderAuth();
   if (state.user) {
     try {
@@ -1963,7 +2040,7 @@ const initAuth = async () => {
       return;
     }
 
-    loadProfile();
+    await loadProfile();
     try {
       await refresh({ showLoading: false, loadingText: "資料載入中..." });
       await processPendingQueue();
