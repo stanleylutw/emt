@@ -1,6 +1,7 @@
 const SUPABASE_URL = "https://iysshfoqqzdwkfeqnsda.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_9Tts206qgN5G3toPwcYv2g_V1Ct-W44";
 const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
+const APP_VERSION = "1.4";
 
 const state = {
   user: null,
@@ -10,6 +11,7 @@ const state = {
   modeOverride: null,
   editRowId: null,
   editRowIsOpen: false,
+  editRowIsStandby: false,
   eventSheetMode: "final",
   summaryRange: "today",
   summaryTouchStartX: null,
@@ -26,6 +28,7 @@ const state = {
   availableHistoryDates: [],
   timelineOrder: "desc",
   healingStandbyRows: false,
+  timelineEditMode: false,
   profileLoadPromise: null,
   refreshPromise: null
 };
@@ -79,6 +82,8 @@ const el = {
   eventForm: document.getElementById("eventForm"),
   saveDraftBtn: document.getElementById("saveDraftBtn"),
   confirmFinishBtn: document.getElementById("confirmFinishBtn"),
+  eventStartTime: document.getElementById("eventStartTime"),
+  fillEventStartNowBtn: document.getElementById("fillEventStartNowBtn"),
   eventFinishTime: document.getElementById("eventFinishTime"),
   fillEventNowBtn: document.getElementById("fillEventNowBtn"),
   cancelEventBtn: document.getElementById("cancelEventBtn"),
@@ -108,7 +113,9 @@ const el = {
   clearDebugLogBtn: document.getElementById("clearDebugLogBtn"),
   profileStatus: document.getElementById("profileStatus"),
   syncIndicator: document.getElementById("syncIndicator"),
-  syncText: document.getElementById("syncText")
+  syncText: document.getElementById("syncText"),
+  appVersionText: document.getElementById("appVersionText"),
+  appBuildTimeText: document.getElementById("appBuildTimeText")
 };
 
 const DEFAULT_AVATAR = "assets/star-of-life.png";
@@ -131,6 +138,15 @@ const PENDING_SYNC_MAX = 200;
 const PROFILE_TABLE = "profiles";
 
 const pad2 = (n) => String(n).padStart(2, "0");
+
+const toBuildStamp = (date = new Date()) => {
+  const yy = String(date.getFullYear()).slice(-2);
+  const mm = pad2(date.getMonth() + 1);
+  const dd = pad2(date.getDate());
+  const hh = pad2(date.getHours());
+  const min = pad2(date.getMinutes());
+  return `${yy}${mm}${dd}${hh}${min}`;
+};
 
 const toInput24h = (date = new Date()) => {
   const y = date.getFullYear();
@@ -284,6 +300,15 @@ const addDebugLog = (event, meta = {}, level = "info") => {
   }
 };
 
+const applyFooterVersion = () => {
+  if (el.appVersionText) {
+    el.appVersionText.textContent = APP_VERSION;
+  }
+  if (el.appBuildTimeText) {
+    el.appBuildTimeText.textContent = toBuildStamp(new Date());
+  }
+};
+
 const exportDebugLogsText = () => {
   const logs = readDebugLogs();
   return JSON.stringify(
@@ -342,6 +367,40 @@ const enqueuePendingItem = (item) => {
   if (row.type === "dispatch_update" && row.rowId) {
     const filtered = current.filter((x) => !(x.type === "dispatch_update" && x.rowId === row.rowId));
     writePendingQueue([...filtered, row]);
+  } else if (row.type === "dispatch_insert") {
+    const key = [
+      row.payload?.session_id || "",
+      row.payload?.dispatch_time || "",
+      row.payload?.note || "",
+      row.payload?.hospital || "",
+      row.payload?.hospital_custom || "",
+      row.payload?.patient_count || "",
+      row.payload?.patient_count_custom || "",
+      row.payload?.case_type || "",
+      row.payload?.case_type_custom || "",
+      row.payload?.chief_complaint || ""
+    ].join("|");
+    const exists = current.some((x) => {
+      if (x.type !== "dispatch_insert") return false;
+      const xKey = [
+        x.payload?.session_id || "",
+        x.payload?.dispatch_time || "",
+        x.payload?.note || "",
+        x.payload?.hospital || "",
+        x.payload?.hospital_custom || "",
+        x.payload?.patient_count || "",
+        x.payload?.patient_count_custom || "",
+        x.payload?.case_type || "",
+        x.payload?.case_type_custom || "",
+        x.payload?.chief_complaint || ""
+      ].join("|");
+      return xKey === key;
+    });
+    if (exists) {
+      addDebugLog("pending.enqueue.skip_duplicate", { type: row.type });
+      return;
+    }
+    writePendingQueue([...current, row]);
   } else {
     writePendingQueue([...current, row]);
   }
@@ -763,7 +822,48 @@ const nextSeq = async () => {
   return maxSeq + 1;
 };
 
+const isSameDispatchPayload = (row, payload) => {
+  if (!row || !payload) return false;
+  return (
+    String(row.session_id || "") === String(payload.session_id || "") &&
+    String(row.dispatch_time || "") === String(payload.dispatch_time || "") &&
+    String(row.vehicle || "") === String(payload.vehicle || "") &&
+    String(row.vehicle_custom || "") === String(payload.vehicle_custom || "") &&
+    String(row.case_type || "") === String(payload.case_type || "") &&
+    String(row.case_type_custom || "") === String(payload.case_type_custom || "") &&
+    String(row.patient_count || "") === String(payload.patient_count || "") &&
+    String(row.patient_count_custom || "") === String(payload.patient_count_custom || "") &&
+    String(row.hospital || "") === String(payload.hospital || "") &&
+    String(row.hospital_custom || "") === String(payload.hospital_custom || "") &&
+    String(row.chief_complaint || "") === String(payload.chief_complaint || "") &&
+    String(row.note || "") === String(payload.note || "")
+  );
+};
+
+const findExistingDispatchByPayload = async (payload) => {
+  if (!payload?.session_id || !payload?.dispatch_time) return null;
+  const { data, error } = await dbQuery(
+    (signal) =>
+      supabaseClient
+        .from("duty_dispatches")
+        .select("*")
+        .eq("session_id", payload.session_id)
+        .eq("dispatch_time", payload.dispatch_time)
+        .abortSignal(signal),
+    { label: "查找已存在勤務明細", attempts: 1, timeoutMs: 5000 }
+  );
+  if (error) throw error;
+  const rows = Array.isArray(data) ? data : [];
+  return rows.find((x) => isSameDispatchPayload(x, payload)) || null;
+};
+
 const insertDispatch = async (payload, retryTextPrefix = "新增勤務明細同步中") => {
+  const existsBefore = await findExistingDispatchByPayload(payload);
+  if (existsBefore) {
+    addDebugLog("dispatch.insert.idempotent.hit", { rowId: existsBefore.id || null });
+    return existsBefore;
+  }
+
   let seq = await nextSeq();
   let attempts = 0;
   while (attempts < 5) {
@@ -778,6 +878,13 @@ const insertDispatch = async (payload, retryTextPrefix = "新增勤務明細同�
     );
     if (!error) return;
     if (!String(error.message || "").includes("uq_duty_dispatches_session_seq")) throw error;
+
+    const existsAfterConflict = await findExistingDispatchByPayload(payload);
+    if (existsAfterConflict) {
+      addDebugLog("dispatch.insert.idempotent.hit_after_conflict", { rowId: existsAfterConflict.id || null });
+      return existsAfterConflict;
+    }
+
     seq += 1;
     attempts += 1;
   }
@@ -926,8 +1033,8 @@ const transportedUnits = (row) => {
   return Number.isFinite(n) ? Math.max(0, n) : 0;
 };
 
-const setSummaryValues = ({ standbyMs = 0, eventCount = 0, transported = 0 }) => {
-  const totalMin = Math.floor(standbyMs / 60000);
+const setSummaryValues = ({ dutyMs = 0, eventCount = 0, transported = 0 }) => {
+  const totalMin = Math.floor(dutyMs / 60000);
   const hh = String(Math.floor(totalMin / 60)).padStart(2, "0");
   const mm = String(totalMin % 60).padStart(2, "0");
   el.sumDutyHours.textContent = `${hh}:${mm}`;
@@ -1018,7 +1125,7 @@ const renderSummary = async () => {
   }
 
   const map = buildSessionRowsMap(rows || []);
-  let standbyMs = 0;
+  let dutyMs = 0;
   let eventCount = 0;
   let transported = 0;
 
@@ -1035,16 +1142,15 @@ const renderSummary = async () => {
           : Date.now();
       const dur = Math.max(0, end - start);
 
-      if (isStandby(cur)) {
-        standbyMs += dur;
-      } else {
+      dutyMs += dur;
+      if (!isStandby(cur)) {
         eventCount += 1;
         transported += transportedUnits(cur);
       }
     }
   });
 
-  setSummaryValues({ standbyMs, eventCount, transported });
+  setSummaryValues({ dutyMs, eventCount, transported });
 };
 
 const switchSummaryRange = async (nextRange) => {
@@ -1078,6 +1184,35 @@ const rowTimelineLine2 = (row) => {
   const caseType = row.case_type === "其他" ? row.case_type_custom : row.case_type;
   const complaint = (row.chief_complaint || "").trim() || "-";
   return `${hospital || "未填"} ${count || "?"}人 ${caseType || "未填"} ${complaint}`;
+};
+
+const escapeHtml = (text) =>
+  String(text ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+
+const standbyLineIcon = () => `
+  <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+    <circle cx="12" cy="12" r="8.5" stroke="currentColor" stroke-width="2"></circle>
+    <path d="M12 7.8v4.6l2.9 1.9" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
+  </svg>
+`;
+
+const rowTimelineLine2Html = (row) => {
+  const text = escapeHtml(rowTimelineLine2(row));
+  if (isStandby(row)) {
+    return `
+      <span class="item-note-icon standby" aria-hidden="true">${standbyLineIcon()}</span>
+      <span class="item-note-text">${text}</span>
+    `;
+  }
+  return `
+    <span class="item-note-icon event" aria-hidden="true">🚑</span>
+    <span class="item-note-text">${text}</span>
+  `;
 };
 
 const groupRowsBySession = (rows) => {
@@ -1380,18 +1515,34 @@ const fillEventForm = (row) => {
 
 const setEventSheetMode = (mode) => {
   state.eventSheetMode = mode;
+  if (el.eventForm) {
+    el.eventForm.classList.toggle("edit-mode", mode === "edit");
+    el.eventForm.classList.toggle("standby-time-only", mode === "edit" && state.editRowIsStandby);
+  }
   if (mode === "final") {
     el.eventSheetTitle.textContent = "確認結束出勤（可再檢查）";
     el.saveDraftBtn.classList.add("hidden");
     el.confirmFinishBtn.classList.remove("hidden");
+    if (el.eventStartTime) el.eventStartTime.disabled = true;
     el.eventFinishTime.disabled = false;
+    if (el.fillEventStartNowBtn) el.fillEventStartNowBtn.disabled = true;
+    if (el.fillEventNowBtn) el.fillEventNowBtn.disabled = false;
+    setEventDetailDisabled(false);
     return;
   }
 
   el.eventSheetTitle.textContent = "編輯紀錄";
   el.saveDraftBtn.classList.remove("hidden");
   el.confirmFinishBtn.classList.add("hidden");
-  el.eventFinishTime.disabled = true;
+  if (el.eventStartTime) el.eventStartTime.disabled = false;
+  el.eventFinishTime.disabled = false;
+  if (el.fillEventStartNowBtn) el.fillEventStartNowBtn.disabled = false;
+  if (el.fillEventNowBtn) el.fillEventNowBtn.disabled = false;
+  if (state.editRowIsStandby) {
+    setEventDetailDisabled(true);
+  } else {
+    setEventDetailDisabled(false);
+  }
 };
 
 const buildEventUpdatePayload = (open) => {
@@ -1432,6 +1583,21 @@ const resolveStandbyInsertIso = (eventRow, finishDate) => {
   return new Date(eventStartMs + 1000).toISOString();
 };
 
+const DETAIL_FIELD_KEYS = ["hospital", "patientCount", "caseType", "chiefComplaint", "bp", "spo2", "pulse", "memo"];
+
+const setEventDetailDisabled = (disabled) => {
+  DETAIL_FIELD_KEYS.forEach((k) => {
+    const node = el[k];
+    if (!node) return;
+    node.disabled = Boolean(disabled);
+  });
+  if (Array.isArray(el.equipmentItems)) {
+    el.equipmentItems.forEach((x) => {
+      x.disabled = Boolean(disabled);
+    });
+  }
+};
+
 const renderTimeline = () => {
   el.timelineList.innerHTML = "";
   const noRows = !state.rows.length;
@@ -1441,6 +1607,12 @@ const renderTimeline = () => {
     el.sortTimelineBtn.textContent = isDesc ? "↓" : "↑";
     el.sortTimelineBtn.setAttribute("aria-label", `切換排序（目前：${isDesc ? "新到舊" : "舊到新"}）`);
     el.sortTimelineBtn.title = isDesc ? "目前：新到舊" : "目前：舊到新";
+  }
+  if (el.deleteTodayBtn) {
+    const editOn = Boolean(state.timelineEditMode);
+    el.deleteTodayBtn.classList.toggle("active", editOn);
+    el.deleteTodayBtn.setAttribute("aria-label", `切換編輯模式（目前：${editOn ? "開啟" : "關閉"}）`);
+    el.deleteTodayBtn.title = editOn ? "編輯模式：開啟" : "編輯模式：關閉";
   }
   if (el.todayEmpty) {
     el.todayEmpty.classList.toggle("hidden", !noRows);
@@ -1471,14 +1643,15 @@ const renderTimeline = () => {
     const end = next ? next.dispatch_time : state.session?.end_time || new Date().toISOString();
     const item = document.createElement("article");
     item.className = "item";
+    item.dataset.rowId = String(row.id);
     const isCurrent = Boolean(state.session?.status === "active" && sourceIdx === state.rows.length - 1);
     if (isCurrent) {
       item.classList.add("current-task");
       item.classList.add(isStandby(row) ? "current-standby" : "current-event");
     }
-    if (!isStandby(row)) {
+    const canCardEdit = !isStandby(row) && (isCurrent || state.timelineEditMode);
+    if (canCardEdit) {
       item.classList.add("editable");
-      item.dataset.rowId = String(row.id);
     }
     item.innerHTML = `
       <div class="item-top">
@@ -1487,16 +1660,46 @@ const renderTimeline = () => {
           ${
             isCurrent
               ? `<span class="current-status ${isStandby(row) ? "standby" : "event"}">${isStandby(row) ? "待勤中" : "出勤中"}<span class="dots" aria-hidden="true"><span>.</span><span>.</span><span>.</span></span></span>`
-              : !isStandby(row)
-                ? '<span class="edit-icon" aria-label="編輯">✎</span>'
+              : state.timelineEditMode
+                ? `
+                  <button type="button" class="action-icon edit row-action-btn" data-action="edit" data-row-id="${row.id}" aria-label="編輯">✎</button>
+                  <button type="button" class="action-icon delete row-action-btn" data-action="delete" data-row-id="${row.id}" aria-label="刪除">🗑</button>
+                `
                 : ""
           }
         </div>
       </div>
-      <div class="item-note">${rowTimelineLine2(row)}</div>
+      <div class="item-note">${rowTimelineLine2Html(row)}</div>
     `;
     el.timelineList.appendChild(item);
   });
+};
+
+const toggleTimelineEditMode = () => {
+  state.timelineEditMode = !state.timelineEditMode;
+  renderTimeline();
+};
+
+const deleteDispatchRow = async (rowId) => {
+  if (!state.user || !Number.isFinite(rowId) || state.busy) return;
+  const row = (state.rows || []).find((x) => x.id === rowId);
+  if (!row) return;
+  const ok = window.confirm("確認刪除這筆紀錄？");
+  if (!ok) return;
+  try {
+    setSyncing(true, "刪除紀錄中...");
+    const { error } = await dbQuery(
+      (signal) => supabaseClient.from("duty_dispatches").delete().eq("id", rowId).abortSignal(signal),
+      { label: "刪除勤務明細", attempts: DB_WRITE_ATTEMPTS, timeoutMs: DB_WRITE_TIMEOUT_MS }
+    );
+    if (error) throw error;
+    await refresh();
+    setHint(el.sessionStatus, "已刪除 1 筆紀錄。");
+  } catch (err) {
+    setHint(el.sessionStatus, `刪除失敗：${err.message}`);
+  } finally {
+    setSyncing(false);
+  }
 };
 
 const renderAuth = () => {
@@ -1678,7 +1881,12 @@ const openEventSheet = () => {
   if (!last || isStandby(last)) return;
   state.editRowId = last.id;
   state.editRowIsOpen = true;
+  state.editRowIsStandby = false;
   fillEventForm(last);
+  if (el.eventStartTime) {
+    el.eventStartTime.value = toInput24h(new Date(last.dispatch_time));
+  }
+  el.eventFinishTime.value = toInput24h();
   setEventSheetMode("final");
   setHint(el.eventStatus, "");
   el.eventSheet.classList.remove("hidden");
@@ -1699,13 +1907,21 @@ const onSecondaryAction = async () => {
 
 const openEventSheetByRowId = (rowId) => {
   const row = state.rows.find((r) => r.id === rowId);
-  if (!row || isStandby(row)) return;
+  if (!row) return;
   state.editRowId = row.id;
   state.editRowIsOpen = isOpenEvent(row);
+  state.editRowIsStandby = isStandby(row);
   fillEventForm(row);
+  el.eventStartTime.value = toInput24h(new Date(row.dispatch_time));
   el.eventFinishTime.value = toInput24h(new Date(rowEndIso(row)));
   setHint(el.eventStatus, "");
   setEventSheetMode("edit");
+  const isActiveLast =
+    state.session?.status === "active" && latestRow() && Number(latestRow().id) === Number(row.id);
+  if (isActiveLast) {
+    el.eventFinishTime.disabled = true;
+    if (el.fillEventNowBtn) el.fillEventNowBtn.disabled = true;
+  }
   el.eventSheet.classList.remove("hidden");
   const sheetBody = el.eventSheet.querySelector(".sheet-body");
   if (sheetBody) sheetBody.scrollTop = 0;
@@ -1715,6 +1931,7 @@ const closeEventSheet = (force = false) => {
   if (state.busy && !force) return;
   state.editRowId = null;
   state.editRowIsOpen = false;
+  state.editRowIsStandby = false;
   state.eventSheetMode = "final";
   el.eventForm.reset();
   setEquipmentSelections([]);
@@ -1724,7 +1941,14 @@ const closeEventSheet = (force = false) => {
     el.patientCount.disabled = false;
   }
   if (el.caseType) el.caseType.value = "外科";
+  if (el.eventStartTime) {
+    el.eventStartTime.value = "";
+    el.eventStartTime.disabled = false;
+  }
   el.eventFinishTime.disabled = false;
+  if (el.fillEventStartNowBtn) el.fillEventStartNowBtn.disabled = false;
+  if (el.fillEventNowBtn) el.fillEventNowBtn.disabled = false;
+  setEventDetailDisabled(false);
   el.saveDraftBtn.classList.add("hidden");
   el.confirmFinishBtn.classList.remove("hidden");
   el.eventSheet.classList.add("hidden");
@@ -1798,13 +2022,79 @@ const saveEventDraft = async () => {
   if (state.busy) return;
   const rowId = state.editRowId || latestRow()?.id;
   const row = state.rows.find((r) => r.id === rowId);
-  if (!row || isStandby(row)) return;
+  if (!row || !state.session) return;
+
+  const rowIdx = state.rows.findIndex((r) => r.id === row.id);
+  if (rowIdx < 0) return;
+  const prevRow = rowIdx > 0 ? state.rows[rowIdx - 1] : null;
+  const nextRow = rowIdx < state.rows.length - 1 ? state.rows[rowIdx + 1] : null;
+  const nextNextRow = rowIdx < state.rows.length - 2 ? state.rows[rowIdx + 2] : null;
+
+  const startDate = parseInput24h(el.eventStartTime.value);
+  const endDate = parseInput24h(el.eventFinishTime.value);
+  if (!startDate || !endDate) {
+    setHint(el.eventStatus, "開始/結束時間格式錯誤，請用 YYYY-MM-DD HH:mm。");
+    return;
+  }
+
+  const MIN_GAP_MS = 60 * 1000;
+  const startMs = startDate.getTime();
+  const endMs = endDate.getTime();
+  if (endMs - startMs < MIN_GAP_MS) {
+    setHint(el.eventStatus, "時間區間過短，至少需 1 分鐘。");
+    return;
+  }
+
+  if (prevRow) {
+    const prevStartMs = new Date(prevRow.dispatch_time).getTime();
+    if (Number.isFinite(prevStartMs) && startMs < prevStartMs + MIN_GAP_MS) {
+      setHint(el.eventStatus, "開始時間過早，會影響前一筆以上紀錄（不合法）。");
+      return;
+    }
+  } else if (state.session.start_time) {
+    const sessionStartMs = new Date(state.session.start_time).getTime();
+    if (Number.isFinite(sessionStartMs) && startMs < sessionStartMs) {
+      setHint(el.eventStatus, "開始時間不可早於勤務開始時間。");
+      return;
+    }
+  }
+
+  if (nextRow) {
+    if (nextNextRow) {
+      const nextNextMs = new Date(nextNextRow.dispatch_time).getTime();
+      if (Number.isFinite(nextNextMs) && endMs > nextNextMs - MIN_GAP_MS) {
+        setHint(el.eventStatus, "結束時間過晚，會影響超過相鄰一筆（不合法）。");
+        return;
+      }
+    } else if (state.session.status === "active") {
+      if (endMs > Date.now() - MIN_GAP_MS) {
+        setHint(el.eventStatus, "結束時間過晚，已超過目前可調整範圍。");
+        return;
+      }
+    } else if (state.session.end_time) {
+      const sessionEndMs = new Date(state.session.end_time).getTime();
+      if (Number.isFinite(sessionEndMs) && endMs > sessionEndMs - MIN_GAP_MS) {
+        setHint(el.eventStatus, "結束時間超過勤務結束時間（不合法）。");
+        return;
+      }
+    }
+  } else if (state.session.status === "active") {
+    const currentEndMs = new Date(rowEndIso(row)).getTime();
+    if (Math.abs(endMs - currentEndMs) > 30 * 1000) {
+      setHint(el.eventStatus, "進行中最後一筆不可調整結束時間。");
+      return;
+    }
+  }
 
   try {
     setSyncing(true, "暫存同步中...");
     setHint(el.eventStatus, "儲存中...");
-    const payload = buildEventUpdatePayload(state.editRowIsOpen);
-    const { error } = await dbQuery(
+    const basePayload = state.editRowIsStandby ? {} : buildEventUpdatePayload(state.editRowIsOpen);
+    const payload = {
+      ...basePayload,
+      dispatch_time: new Date(startMs).toISOString()
+    };
+    const { error: upErr } = await dbQuery(
       (signal) => supabaseClient.from("duty_dispatches").update(payload).eq("id", row.id).abortSignal(signal),
       {
         label: "暫存出勤紀錄",
@@ -1813,16 +2103,46 @@ const saveEventDraft = async () => {
         onRetryText: (n, total) => `暫存同步中（重試 ${n}/${total}）...`
       }
     );
-    if (error) throw error;
+    if (upErr) throw upErr;
+
+    if (nextRow) {
+      const { error: nextErr } = await dbQuery(
+        (signal) =>
+          supabaseClient
+            .from("duty_dispatches")
+            .update({ dispatch_time: new Date(endMs).toISOString() })
+            .eq("id", nextRow.id)
+            .abortSignal(signal),
+        {
+          label: "調整相鄰起始時間",
+          attempts: DRAFT_WRITE_ATTEMPTS,
+          timeoutMs: DRAFT_WRITE_TIMEOUT_MS
+        }
+      );
+      if (nextErr) throw nextErr;
+    } else if (state.session.status === "completed") {
+      const { error: sesErr } = await dbQuery(
+        (signal) =>
+          supabaseClient
+            .from("duty_sessions")
+            .update({ end_time: new Date(endMs).toISOString() })
+            .eq("id", state.session.id)
+            .abortSignal(signal),
+        {
+          label: "調整勤務結束時間",
+          attempts: DRAFT_WRITE_ATTEMPTS,
+          timeoutMs: DRAFT_WRITE_TIMEOUT_MS
+        }
+      );
+      if (sesErr) throw sesErr;
+    }
+
     await refresh();
     closeEventSheet(true);
     setHint(el.sessionStatus, "草稿已儲存。");
   } catch (err) {
     if (isRetryableDbError(err)) {
-      const payload = buildEventUpdatePayload(state.editRowIsOpen);
-      enqueuePendingItem({ type: "dispatch_update", rowId: row.id, payload });
-      closeEventSheet(true);
-      setHint(el.sessionStatus, "網路不穩，已先存為待同步，恢復後會自動補送。");
+      setHint(el.eventStatus, "網路不穩，這次包含時間重排，請稍後再試。");
       return;
     }
     setHint(el.eventStatus, `草稿儲存失敗：${err.message}`);
@@ -1966,6 +2286,7 @@ const clearSignedOutState = () => {
   state.session = null;
   state.rows = [];
   state.profile = { displayName: "", unit: "", title: "", phone: "", avatarDataUrl: "" };
+  state.timelineEditMode = false;
   closeEventSheet(true);
   if (el.profileSheet) {
     el.profileSheet.classList.add("hidden");
@@ -2089,6 +2410,11 @@ const bind = () => {
       el.startTime.value = toInput24h();
     });
   }
+  if (el.fillEventStartNowBtn && el.eventStartTime) {
+    el.fillEventStartNowBtn.addEventListener("click", () => {
+      el.eventStartTime.value = toInput24h();
+    });
+  }
   if (el.fillEventNowBtn && el.eventFinishTime) {
     el.fillEventNowBtn.addEventListener("click", () => {
       el.eventFinishTime.value = toInput24h();
@@ -2169,7 +2495,7 @@ const bind = () => {
   if (el.startShiftBtn) el.startShiftBtn.addEventListener("click", startShift);
   if (el.resumeShiftBtn) el.resumeShiftBtn.addEventListener("click", startShift);
   if (el.sessionForm) el.sessionForm.addEventListener("submit", startShift);
-  if (el.deleteTodayBtn) el.deleteTodayBtn.addEventListener("click", deleteTodayRecords);
+  if (el.deleteTodayBtn) el.deleteTodayBtn.addEventListener("click", toggleTimelineEditMode);
   if (el.sortTimelineBtn) {
     el.sortTimelineBtn.addEventListener("click", () => {
       state.timelineOrder = state.timelineOrder === "desc" ? "asc" : "desc";
@@ -2212,6 +2538,19 @@ const bind = () => {
     }
   }, { passive: true });
   el.timelineList.addEventListener("click", (event) => {
+    const actionBtn = event.target.closest(".row-action-btn");
+    if (actionBtn) {
+      const rowId = Number(actionBtn.dataset.rowId);
+      if (!Number.isFinite(rowId)) return;
+      if (actionBtn.dataset.action === "delete") {
+        deleteDispatchRow(rowId);
+        return;
+      }
+      const row = (state.rows || []).find((x) => x.id === rowId);
+      if (!row) return;
+      openEventSheetByRowId(rowId);
+      return;
+    }
     const target = event.target.closest(".item.editable");
     if (!target) return;
     const rowId = Number(target.dataset.rowId);
@@ -2385,6 +2724,7 @@ const initAuth = async () => {
 
 const init = async () => {
   addDebugLog("init.start", { href: window.location.href });
+  applyFooterVersion();
   window.addEventListener("online", async () => {
     addDebugLog("network.online");
     await processPendingQueue();

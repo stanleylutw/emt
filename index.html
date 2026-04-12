@@ -4,6 +4,8 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
     <title>EMT 時間軸勤務</title>
+    <link rel="apple-touch-icon" sizes="180x180" href="assets/apple-touch-icon.png" />
+    <link rel="icon" type="image/png" sizes="32x32" href="assets/favicon-32.png" />
     <link rel="icon" type="image/svg+xml" href="favicon.svg" />
     <link rel="stylesheet" href="styles.css" />
   </head>
@@ -93,7 +95,7 @@
             <h2>今日勤務</h2>
             <div class="today-duty-actions">
               <button id="sortTimelineBtn" type="button" class="icon-btn ghost-icon" aria-label="切換排序（目前：新到舊）">⇅</button>
-              <button id="deleteTodayBtn" type="button" class="icon-btn danger-icon" aria-label="刪除今日紀錄">🗑</button>
+              <button id="deleteTodayBtn" type="button" class="icon-btn ghost-icon" aria-label="切換編輯模式">✎</button>
             </div>
           </div>
           <div id="todayEmpty" class="today-empty hidden">
@@ -105,6 +107,10 @@
           </div>
         </section>
       </section>
+
+      <footer class="site-footer" aria-label="版權資訊">
+        <small>© 2026 Stanley All rights reserved. V<span id="appVersionText">x.xx</span>(<span id="appBuildTimeText">yymmddhhmm</span>)</small>
+      </footer>
     </main>
 
     <footer id="actionBar" class="action-bar hidden">
@@ -117,13 +123,21 @@
         <h2 id="eventSheetTitle">結束出勤</h2>
         <form id="eventForm" class="form">
           <label>
+            開始時間
+            <div class="inline time-inline">
+              <input id="eventStartTime" type="text" inputmode="numeric" placeholder="YYYY-MM-DD HH:mm" required />
+              <button id="fillEventStartNowBtn" class="small" type="button">現在</button>
+            </div>
+          </label>
+          <label>
             結束時間
-            <div class="inline">
+            <div class="inline time-inline">
               <input id="eventFinishTime" type="text" inputmode="numeric" placeholder="YYYY-MM-DD HH:mm" required />
               <button id="fillEventNowBtn" class="small" type="button">現在</button>
             </div>
           </label>
-          <div class="tri-row">
+          <div id="eventDetailsBlock">
+            <div class="tri-row">
             <label>
               醫院
               <select id="hospital" required>
@@ -155,8 +169,8 @@
                 <option value="其他">其他</option>
               </select>
             </label>
-          </div>
-          <div class="tri-row vital-row">
+            </div>
+            <div class="tri-row vital-row">
             <label>
               血壓
               <input id="bp" type="text" inputmode="numeric" pattern="[0-9/]*" />
@@ -169,34 +183,35 @@
               脈搏
               <input id="pulse" type="text" inputmode="numeric" pattern="[0-9]*" />
             </label>
+            </div>
+            <label>
+              主訴
+              <textarea id="chiefComplaint" rows="2" placeholder="可輸入主訴"></textarea>
+            </label>
+            <details class="equipment-collapsible">
+              <summary>使用器材（12 項）</summary>
+              <fieldset class="equipment-grid">
+                <label class="check-line"><input type="checkbox" name="equipmentItem" value="血糖" /><span>血糖</span></label>
+                <label class="check-line"><input type="checkbox" name="equipmentItem" value="氧氣" /><span>氧氣</span></label>
+                <label class="check-line"><input type="checkbox" name="equipmentItem" value="傷口處理" /><span>傷口處理</span></label>
+                <label class="check-line"><input type="checkbox" name="equipmentItem" value="IV" /><span>IV</span></label>
+                <label class="check-line"><input type="checkbox" name="equipmentItem" value="AED" /><span>AED</span></label>
+                <label class="check-line"><input type="checkbox" name="equipmentItem" value="BVM" /><span>BVM</span></label>
+                <label class="check-line"><input type="checkbox" name="equipmentItem" value="抽吸器" /><span>抽吸器</span></label>
+                <label class="check-line"><input type="checkbox" name="equipmentItem" value="頸圈" /><span>頸圈</span></label>
+                <label class="check-line"><input type="checkbox" name="equipmentItem" value="長背板" /><span>長背板</span></label>
+                <label class="check-line"><input type="checkbox" name="equipmentItem" value="止血帶" /><span>止血帶</span></label>
+                <label class="check-line"><input type="checkbox" name="equipmentItem" value="紗布敷料" /><span>紗布敷料</span></label>
+                <label class="check-line"><input type="checkbox" name="equipmentItem" value="心電貼片" /><span>心電貼片</span></label>
+              </fieldset>
+            </details>
+            <label>
+              備註
+              <textarea id="memo" rows="2"></textarea>
+            </label>
           </div>
-          <label>
-            主訴
-            <textarea id="chiefComplaint" rows="2" placeholder="可輸入主訴"></textarea>
-          </label>
-          <details class="equipment-collapsible">
-            <summary>使用器材（12 項）</summary>
-            <fieldset class="equipment-grid">
-              <label class="check-line"><input type="checkbox" name="equipmentItem" value="血糖" /><span>血糖</span></label>
-              <label class="check-line"><input type="checkbox" name="equipmentItem" value="氧氣" /><span>氧氣</span></label>
-              <label class="check-line"><input type="checkbox" name="equipmentItem" value="傷口處理" /><span>傷口處理</span></label>
-              <label class="check-line"><input type="checkbox" name="equipmentItem" value="IV" /><span>IV</span></label>
-              <label class="check-line"><input type="checkbox" name="equipmentItem" value="AED" /><span>AED</span></label>
-              <label class="check-line"><input type="checkbox" name="equipmentItem" value="BVM" /><span>BVM</span></label>
-              <label class="check-line"><input type="checkbox" name="equipmentItem" value="抽吸器" /><span>抽吸器</span></label>
-              <label class="check-line"><input type="checkbox" name="equipmentItem" value="頸圈" /><span>頸圈</span></label>
-              <label class="check-line"><input type="checkbox" name="equipmentItem" value="長背板" /><span>長背板</span></label>
-              <label class="check-line"><input type="checkbox" name="equipmentItem" value="止血帶" /><span>止血帶</span></label>
-              <label class="check-line"><input type="checkbox" name="equipmentItem" value="紗布敷料" /><span>紗布敷料</span></label>
-              <label class="check-line"><input type="checkbox" name="equipmentItem" value="心電貼片" /><span>心電貼片</span></label>
-            </fieldset>
-          </details>
-          <label>
-            備註
-            <textarea id="memo" rows="2"></textarea>
-          </label>
           <div class="sheet-actions">
-            <button id="saveDraftBtn" type="button" class="ghost">暫存</button>
+            <button id="saveDraftBtn" type="button" class="ghost">存檔</button>
             <button id="confirmFinishBtn" type="submit" class="primary">確認結束</button>
             <button id="cancelEventBtn" type="button" class="ghost">取消</button>
           </div>
