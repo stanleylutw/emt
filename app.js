@@ -12,6 +12,8 @@ const state = {
   editRowId: null,
   editRowIsOpen: false,
   editRowIsStandby: false,
+  editOriginalStartInput: "",
+  editOriginalEndInput: "",
   eventSheetMode: "final",
   summaryRange: "today",
   summaryTouchStartX: null,
@@ -2331,7 +2333,7 @@ const onSecondaryAction = async () => {
 };
 
 const openEventSheetByRowId = (rowId) => {
-  const row = state.rows.find((r) => r.id === rowId);
+  const row = state.rows.find((r) => String(r.id) === String(rowId));
   if (!row) return;
   state.editRowId = row.id;
   state.editRowIsOpen = isOpenEvent(row);
@@ -2339,6 +2341,8 @@ const openEventSheetByRowId = (rowId) => {
   fillEventForm(row);
   el.eventStartTime.value = toInput24h(new Date(row.dispatch_time));
   el.eventFinishTime.value = toInput24h(new Date(rowEndIso(row)));
+  state.editOriginalStartInput = el.eventStartTime.value;
+  state.editOriginalEndInput = el.eventFinishTime.value;
   setHint(el.eventStatus, "");
   setEventSheetMode("edit");
   const isActiveLast =
@@ -2357,6 +2361,8 @@ const closeEventSheet = (force = false) => {
   state.editRowId = null;
   state.editRowIsOpen = false;
   state.editRowIsStandby = false;
+  state.editOriginalStartInput = "";
+  state.editOriginalEndInput = "";
   state.eventSheetMode = "final";
   el.eventForm.reset();
   setEquipmentSelections([]);
@@ -2439,85 +2445,96 @@ const saveEventDraft = async () => {
     return;
   }
   const rowId = state.editRowId || latestRow()?.id;
-  const row = state.rows.find((r) => r.id === rowId);
+  const row = state.rows.find((r) => String(r.id) === String(rowId));
   if (!row || !state.session) return;
 
-  const rowIdx = state.rows.findIndex((r) => r.id === row.id);
+  const rowIdx = state.rows.findIndex((r) => String(r.id) === String(row.id));
   if (rowIdx < 0) return;
   const prevRow = rowIdx > 0 ? state.rows[rowIdx - 1] : null;
   const nextRow = rowIdx < state.rows.length - 1 ? state.rows[rowIdx + 1] : null;
   const nextNextRow = rowIdx < state.rows.length - 2 ? state.rows[rowIdx + 2] : null;
 
-  const startDate = parseInput24h(el.eventStartTime.value);
-  const endDate = parseInput24h(el.eventFinishTime.value);
+  const startInput = String(el.eventStartTime.value || "").trim();
+  const endInput = String(el.eventFinishTime.value || "").trim();
+  const startDate = parseInput24h(startInput);
+  const endDate = parseInput24h(endInput);
   if (!startDate || !endDate) {
     setHint(el.eventStatus, "開始/結束時間格式錯誤，請用 YYYY-MM-DD HH:mm。");
     return;
   }
+  const startChanged = startInput !== String(state.editOriginalStartInput || "");
+  const endChanged = endInput !== String(state.editOriginalEndInput || "");
+  const changedTime = startChanged || endChanged;
 
   const MIN_GAP_MS = 60 * 1000;
   const startMs = startDate.getTime();
   const endMs = endDate.getTime();
-  if (endMs - startMs < MIN_GAP_MS) {
-    setHint(el.eventStatus, "時間區間過短，至少需 1 分鐘。");
-    return;
-  }
-
-  if (prevRow) {
-    const prevStartMs = new Date(prevRow.dispatch_time).getTime();
-    if (Number.isFinite(prevStartMs) && startMs < prevStartMs + MIN_GAP_MS) {
-      setHint(el.eventStatus, "開始時間過早，會影響前一筆以上紀錄（不合法）。");
+  if (changedTime) {
+    if (endMs - startMs < MIN_GAP_MS) {
+      setHint(el.eventStatus, "時間區間過短，至少需 1 分鐘。");
       return;
     }
-  } else if (state.session.start_time) {
-    const sessionStartMs = new Date(state.session.start_time).getTime();
-    if (Number.isFinite(sessionStartMs) && startMs < sessionStartMs) {
-      setHint(el.eventStatus, "開始時間不可早於勤務開始時間。");
-      return;
-    }
-  }
 
-  if (nextRow) {
-    if (nextNextRow) {
-      const nextNextMs = new Date(nextNextRow.dispatch_time).getTime();
-      if (Number.isFinite(nextNextMs) && endMs > nextNextMs - MIN_GAP_MS) {
-        setHint(el.eventStatus, "結束時間過晚，會影響超過相鄰一筆（不合法）。");
+    if (prevRow) {
+      const prevStartMs = new Date(prevRow.dispatch_time).getTime();
+      if (Number.isFinite(prevStartMs) && startMs < prevStartMs + MIN_GAP_MS) {
+        setHint(el.eventStatus, "開始時間過早，會影響前一筆以上紀錄（不合法）。");
         return;
+      }
+    } else if (state.session.start_time) {
+      const sessionStartMs = new Date(state.session.start_time).getTime();
+      if (Number.isFinite(sessionStartMs) && startMs < sessionStartMs) {
+        setHint(el.eventStatus, "開始時間不可早於勤務開始時間。");
+        return;
+      }
+    }
+
+    if (nextRow) {
+      if (nextNextRow) {
+        const nextNextMs = new Date(nextNextRow.dispatch_time).getTime();
+        if (Number.isFinite(nextNextMs) && endMs > nextNextMs - MIN_GAP_MS) {
+          setHint(el.eventStatus, "結束時間過晚，會影響超過相鄰一筆（不合法）。");
+          return;
+        }
+      } else if (state.session.status === "active") {
+        if (endMs > Date.now() - MIN_GAP_MS) {
+          setHint(el.eventStatus, "結束時間過晚，已超過目前可調整範圍。");
+          return;
+        }
+      } else if (state.session.end_time) {
+        const sessionEndMs = new Date(state.session.end_time).getTime();
+        if (Number.isFinite(sessionEndMs) && endMs > sessionEndMs - MIN_GAP_MS) {
+          setHint(el.eventStatus, "結束時間超過勤務結束時間（不合法）。");
+          return;
+        }
       }
     } else if (state.session.status === "active") {
-      if (endMs > Date.now() - MIN_GAP_MS) {
-        setHint(el.eventStatus, "結束時間過晚，已超過目前可調整範圍。");
+      const currentEndMs = new Date(rowEndIso(row)).getTime();
+      if (Math.abs(endMs - currentEndMs) > 30 * 1000) {
+        setHint(el.eventStatus, "進行中最後一筆不可調整結束時間。");
         return;
       }
-    } else if (state.session.end_time) {
-      const sessionEndMs = new Date(state.session.end_time).getTime();
-      if (Number.isFinite(sessionEndMs) && endMs > sessionEndMs - MIN_GAP_MS) {
-        setHint(el.eventStatus, "結束時間超過勤務結束時間（不合法）。");
-        return;
-      }
-    }
-  } else if (state.session.status === "active") {
-    const currentEndMs = new Date(rowEndIso(row)).getTime();
-    if (Math.abs(endMs - currentEndMs) > 30 * 1000) {
-      setHint(el.eventStatus, "進行中最後一筆不可調整結束時間。");
-      return;
     }
   }
 
   const basePayload = state.editRowIsStandby ? {} : buildEventUpdatePayload(state.editRowIsOpen);
-  const payload = {
-    ...basePayload,
-    dispatch_time: new Date(startMs).toISOString()
-  };
+  const payload = changedTime
+    ? {
+        ...basePayload,
+        dispatch_time: new Date(startMs).toISOString()
+      }
+    : { ...basePayload };
 
-  if (isLocalRowId(row.id)) {
-    updatePendingInsertPayloadByLocalRowId(row.id, payload);
-  } else {
-    enqueuePendingItem({ type: "dispatch_update", rowId: row.id, payload });
+  if (Object.keys(payload).length) {
+    if (isLocalRowId(row.id)) {
+      updatePendingInsertPayloadByLocalRowId(row.id, payload);
+    } else {
+      enqueuePendingItem({ type: "dispatch_update", rowId: row.id, payload });
+    }
+    upsertLocalRowFromPayload(row.id, { ...row, ...payload });
   }
-  upsertLocalRowFromPayload(row.id, { ...row, ...payload });
 
-  if (nextRow) {
+  if (changedTime && nextRow) {
     const nextPayload = { dispatch_time: new Date(endMs).toISOString() };
     if (isLocalRowId(nextRow.id)) {
       updatePendingInsertPayloadByLocalRowId(nextRow.id, nextPayload);
@@ -2525,7 +2542,7 @@ const saveEventDraft = async () => {
       enqueuePendingItem({ type: "dispatch_update", rowId: nextRow.id, payload: nextPayload });
     }
     upsertLocalRowFromPayload(nextRow.id, { ...nextRow, ...nextPayload });
-  } else if (state.session.status === "completed") {
+  } else if (changedTime && state.session.status === "completed") {
     const sessionPayload = { end_time: new Date(endMs).toISOString() };
     enqueuePendingItem({ type: "session_update", sessionId: state.session.id, payload: sessionPayload });
     state.session = { ...state.session, ...sessionPayload };
