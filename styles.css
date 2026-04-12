@@ -485,7 +485,7 @@ button[aria-disabled="true"] {
 
 .item.current-task.current-event {
   background: #fff4e8;
-  border: 1px solid #f0bb86;
+  border: 0;
   animation: currentEventBreathe 1.8s ease-in-out infinite;
 }
 
@@ -531,6 +531,12 @@ button[aria-disabled="true"] {
 
 .current-status.event {
   color: #bf2d2d;
+}
+
+#finishEventBtn.primary {
+  background: #ffe9d2;
+  color: #bf2d2d;
+  border: 1px solid #f0bb86;
 }
 
 @keyframes currentEventBreathe {
