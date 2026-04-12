@@ -112,9 +112,13 @@ h2 {
   font-size: 1.15rem;
 }
 
+.overview-title {
+  margin: 2px 0 10px;
+}
+
 .summary-tabs {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 8px;
   margin-bottom: 10px;
   width: 100%;
@@ -125,13 +129,17 @@ h2 {
 }
 
 .summary-tabs .tab {
-  padding: 9px 4px 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 4px;
+  height: 29px;
   border-radius: 10px;
   border: 0;
   background: #e5ebf0;
   color: #607485;
-  font-weight: 600;
-  font-size: 13px;
+  font-weight: 700;
+  font-size: 16px;
   box-shadow: none;
   transition: background 0.18s ease, color 0.18s ease, box-shadow 0.18s ease;
 }
@@ -142,6 +150,18 @@ h2 {
   box-shadow:
     inset 0 0 0 1px rgba(141, 185, 208, 0.55),
     0 1px 3px rgba(23, 48, 66, 0.08);
+}
+
+.summary-history {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+}
+
+.summary-history.expanded {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #d9e7ef;
 }
 
 .form {
@@ -228,6 +248,89 @@ button[aria-disabled="true"] {
   margin: 0;
 }
 
+.history-tab {
+  line-height: 1;
+}
+
+.history-tab-icon {
+  width: 60%;
+  height: 60%;
+  min-width: 14px;
+  min-height: 14px;
+}
+
+.history-tab.expanded {
+  background: #cfe7f3;
+  color: #0b6f8d;
+  box-shadow:
+    inset 0 0 0 1px rgba(141, 185, 208, 0.55),
+    0 1px 3px rgba(23, 48, 66, 0.08);
+}
+
+.history-panel {
+  margin-top: 10px;
+}
+
+.history-controls {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.history-controls input[type="date"] {
+  min-width: 140px;
+  padding: 8px 10px;
+}
+
+.history-controls select {
+  min-width: 140px;
+  padding: 8px 10px;
+}
+
+.history-controls button {
+  padding: 8px 10px;
+}
+
+.history-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.history-session {
+  border: 1px solid #d7e6ee;
+  border-radius: 12px;
+  padding: 8px;
+  background: #f8fbfd;
+}
+
+.history-session-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #2d4c60;
+  margin-bottom: 6px;
+}
+
+.history-delete-btn {
+  border: 1px solid #efc9c9;
+  background: #fdeaea;
+  color: #9f2727;
+  border-radius: 999px;
+  padding: 4px 8px;
+  font-size: 12px;
+  line-height: 1;
+}
+
+.history-row {
+  font-size: 13px;
+  color: #294153;
+  line-height: 1.45;
+}
+
 .icon-btn {
   width: 32px;
   height: 32px;
@@ -250,6 +353,16 @@ button[aria-disabled="true"] {
   display: grid;
   place-items: center;
   padding: 10px 0;
+}
+
+.today-resume-wrap {
+  margin-top: 8px;
+  display: flex;
+  justify-content: center;
+}
+
+.today-resume-wrap button {
+  width: min(260px, 100%);
 }
 
 .big-start-btn {
@@ -323,7 +436,7 @@ button[aria-disabled="true"] {
 
 .stats p {
   margin: 0;
-  font-size: 12px;
+  font-size: 17px;
   color: var(--muted);
 }
 
@@ -348,7 +461,7 @@ button[aria-disabled="true"] {
 .item {
   border: 0;
   border-radius: 12px;
-  padding: 10px;
+  padding: 14px;
   background: #f2f5f7;
 }
 
@@ -379,7 +492,7 @@ button[aria-disabled="true"] {
 
 .item-time {
   font-weight: 700;
-  font-size: 14px;
+  font-size: 20px;
 }
 
 .current-status {
@@ -435,14 +548,14 @@ button[aria-disabled="true"] {
 
 .edit-icon {
   display: inline-flex;
-  width: 24px;
-  height: 24px;
+  width: 28px;
+  height: 28px;
   align-items: center;
   justify-content: center;
   border-radius: 999px;
   background: #eaf4fa;
   color: #0b6f8d;
-  font-size: 14px;
+  font-size: 16px;
   font-weight: 700;
 }
 
@@ -464,9 +577,10 @@ button[aria-disabled="true"] {
 }
 
 .item-note {
-  margin-top: 6px;
+  margin-top: 10px;
   color: var(--text);
-  font-size: 14px;
+  font-size: 18px;
+  line-height: 1.45;
 }
 
 .hint {
@@ -483,7 +597,7 @@ button[aria-disabled="true"] {
   background: rgba(255, 255, 255, 0.96);
   border-top: 1px solid var(--line);
   display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
+  grid-template-columns: 1fr 1fr;
   gap: 8px;
   padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
 }
@@ -605,5 +719,19 @@ button[aria-disabled="true"] {
 
   .equipment-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .history-controls {
+    width: 100%;
+  }
+
+  .history-controls input[type="date"] {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .history-controls select {
+    flex: 1;
+    min-width: 0;
   }
 }

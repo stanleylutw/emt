@@ -22,7 +22,8 @@ const state = {
     phone: "",
     avatarDataUrl: ""
   },
-  profileDraftAvatarDataUrl: ""
+  profileDraftAvatarDataUrl: "",
+  availableHistoryDates: []
 };
 
 const el = {
@@ -41,8 +42,18 @@ const el = {
   sumTransported: document.getElementById("sumTransported"),
   summaryCard: document.getElementById("summaryCard"),
   summaryTabs: document.getElementById("summaryTabs"),
+  summaryHistory: document.getElementById("summaryHistory"),
+  historyToggleBtn: document.getElementById("historyToggleBtn"),
+  historyPanel: document.getElementById("historyPanel"),
+  historyDate: document.getElementById("historyDate"),
+  historyDateList: document.getElementById("historyDateList"),
+  loadHistoryBtn: document.getElementById("loadHistoryBtn"),
+  historyList: document.getElementById("historyList"),
+  historyStatus: document.getElementById("historyStatus"),
 
   startShiftBtn: document.getElementById("startShiftBtn"),
+  resumeShiftBtn: document.getElementById("resumeShiftBtn"),
+  todayResumeWrap: document.getElementById("todayResumeWrap"),
   todayEmpty: document.getElementById("todayEmpty"),
   sessionForm: document.getElementById("sessionForm"),
   displayName: document.getElementById("displayName"),
@@ -57,7 +68,6 @@ const el = {
   timelineList: document.getElementById("timelineList"),
   startEventBtn: document.getElementById("startEventBtn"),
   finishEventBtn: document.getElementById("finishEventBtn"),
-  checkoutBtn: document.getElementById("checkoutBtn"),
 
   eventSheet: document.getElementById("eventSheet"),
   eventSheetTitle: document.getElementById("eventSheetTitle"),
@@ -170,6 +180,19 @@ const formatHm = (iso) => {
   return d.toLocaleTimeString("zh-TW", { hour12: false, hour: "2-digit", minute: "2-digit" });
 };
 
+const toDateInput = (date = new Date()) => {
+  const y = date.getFullYear();
+  const m = pad2(date.getMonth() + 1);
+  const d = pad2(date.getDate());
+  return `${y}-${m}-${d}`;
+};
+
+const isoToDateKey = (iso) => {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return toDateInput(d);
+};
+
 const dayBounds = () => {
   const n = new Date();
   const s = new Date(n.getFullYear(), n.getMonth(), n.getDate());
@@ -185,6 +208,7 @@ const getEffectiveDisplayName = () =>
 const getEffectiveAvatar = () => state.profile.avatarDataUrl || DEFAULT_AVATAR;
 
 const setHint = (target, msg) => {
+  if (!target) return;
   target.textContent = msg || "";
 };
 
@@ -311,9 +335,9 @@ const setSyncing = (on, text = "資料同步中...") => {
   el.syncIndicator.classList.toggle("hidden", !on);
   [
     el.startShiftBtn,
+    el.resumeShiftBtn,
     el.startEventBtn,
     el.finishEventBtn,
-    el.checkoutBtn,
     el.saveDraftBtn,
     el.confirmFinishBtn,
     el.cancelEventBtn,
@@ -548,40 +572,30 @@ const setButtonState = (btn, enabled) => {
   btn.setAttribute("aria-disabled", enabled ? "false" : "true");
 };
 
-const setCheckoutButtonMode = (isStartShiftMode) => {
-  if (!el.checkoutBtn) return;
-  if (isStartShiftMode) {
-    el.checkoutBtn.textContent = "開始協勤";
-    el.checkoutBtn.classList.remove("danger");
-    el.checkoutBtn.classList.add("primary");
-    return;
-  }
-  el.checkoutBtn.textContent = "退勤";
-  el.checkoutBtn.classList.remove("primary");
-  el.checkoutBtn.classList.add("danger");
-};
-
 const applyActionMode = (mode) => {
   if (mode === "none") {
-    setCheckoutButtonMode(true);
     setButtonState(el.startEventBtn, false);
     setButtonState(el.finishEventBtn, false);
-    setButtonState(el.checkoutBtn, true);
+    el.finishEventBtn.textContent = "退勤";
+    el.finishEventBtn.classList.remove("primary");
+    el.finishEventBtn.classList.add("danger-soft");
     return;
   }
 
   if (mode === "standby") {
-    setCheckoutButtonMode(false);
     setButtonState(el.startEventBtn, true);
-    setButtonState(el.finishEventBtn, false);
-    setButtonState(el.checkoutBtn, true);
+    setButtonState(el.finishEventBtn, true);
+    el.finishEventBtn.textContent = "退勤";
+    el.finishEventBtn.classList.remove("primary");
+    el.finishEventBtn.classList.add("danger-soft");
     return;
   }
 
-  setCheckoutButtonMode(false);
   setButtonState(el.startEventBtn, false);
   setButtonState(el.finishEventBtn, true);
-  setButtonState(el.checkoutBtn, false);
+  el.finishEventBtn.textContent = "結束出勤";
+  el.finishEventBtn.classList.remove("danger-soft");
+  el.finishEventBtn.classList.add("primary");
 };
 
 const setModeOverride = (mode) => {
@@ -862,6 +876,240 @@ const rowSummary = (row) => {
   return `${hospital || "未填"} ${count || "?"}人${complaintText}${memo}`;
 };
 
+const groupRowsBySession = (rows) => {
+  const map = new Map();
+  (rows || []).forEach((r) => {
+    if (!map.has(r.session_id)) map.set(r.session_id, []);
+    map.get(r.session_id).push(r);
+  });
+  map.forEach((arr) => arr.sort((a, b) => new Date(a.dispatch_time) - new Date(b.dispatch_time)));
+  return map;
+};
+
+const updateHistoryDateAvailabilityUI = () => {
+  const selected = el.historyDate?.value || "";
+  const availableSet = new Set(state.availableHistoryDates || []);
+  const isAvailable = availableSet.has(selected);
+  if (el.loadHistoryBtn) {
+    el.loadHistoryBtn.disabled = !selected || !isAvailable;
+  }
+  if (!selected) {
+    setHint(el.historyStatus, "請先選日期。");
+    return;
+  }
+  if (!isAvailable) {
+    setHint(el.historyStatus, "該日期無紀錄（不可查詢）。");
+  }
+};
+
+const renderHistoryDateList = () => {
+  if (!el.historyDateList) return;
+  const dates = state.availableHistoryDates || [];
+  if (!dates.length) {
+    el.historyDateList.innerHTML = `<option value="">無紀錄日期</option>`;
+    return;
+  }
+  const options = dates
+    .map((d) => `<option value="${d}">${d}</option>`)
+    .join("");
+  el.historyDateList.innerHTML = options;
+};
+
+const loadAvailableHistoryDates = async () => {
+  if (!state.user) return;
+  const { data, error } = await dbQuery(
+    (signal) =>
+      supabaseClient
+        .from("duty_sessions")
+        .select("start_time")
+        .eq("user_id", state.user.id)
+        .order("start_time", { ascending: false })
+        .abortSignal(signal),
+    { label: "讀取可查日期", attempts: DB_READ_ATTEMPTS, timeoutMs: DB_READ_TIMEOUT_MS }
+  );
+  if (error) throw error;
+  const uniq = Array.from(
+    new Set((data || []).map((row) => isoToDateKey(row.start_time)).filter(Boolean))
+  ).sort((a, b) => (a < b ? 1 : -1));
+  state.availableHistoryDates = uniq;
+  renderHistoryDateList();
+  if (!el.historyDate?.value || !uniq.includes(el.historyDate.value)) {
+    el.historyDate.value = uniq[0] || "";
+  }
+  if (el.historyDateList) {
+    el.historyDateList.value = el.historyDate.value || "";
+  }
+  updateHistoryDateAvailabilityUI();
+};
+
+const renderHistoryList = (sessions, rowsBySession) => {
+  if (!el.historyList) return;
+  el.historyList.innerHTML = "";
+  sessions.forEach((session) => {
+    const card = document.createElement("article");
+    card.className = "history-session";
+
+    const head = document.createElement("div");
+    head.className = "history-session-head";
+    const endText = session.end_time ? formatHm(session.end_time) : "進行中";
+    head.innerHTML = `
+      <span>${formatHm(session.start_time)} - ${endText}</span>
+      <button
+        type="button"
+        class="history-delete-btn"
+        data-session-id="${session.id}"
+        data-session-status="${session.status || ""}"
+        aria-label="刪除此筆歷史紀錄"
+      >
+        刪除
+      </button>
+    `;
+    card.appendChild(head);
+
+    const rows = rowsBySession.get(session.id) || [];
+    rows.forEach((row, idx) => {
+      const line = document.createElement("div");
+      line.className = "history-row";
+      const next = rows[idx + 1];
+      const rowEnd = next ? next.dispatch_time : session.end_time || session.start_time;
+      line.textContent = `${formatHm(row.dispatch_time)} - ${formatHm(rowEnd)}　${rowSummary(row)}`;
+      card.appendChild(line);
+    });
+
+    if (!rows.length) {
+      const empty = document.createElement("div");
+      empty.className = "history-row";
+      empty.textContent = "無明細";
+      card.appendChild(empty);
+    }
+
+    el.historyList.appendChild(card);
+  });
+};
+
+const deleteHistorySession = async (sessionId, sessionStatus = "") => {
+  if (!state.user || !sessionId) return;
+  const isActiveSession = sessionStatus === "active";
+  const ok = window.confirm(
+    isActiveSession
+      ? "此筆紀錄目前顯示進行中，是否強制刪除？此動作無法復原。"
+      : "確認刪除這筆歷史紀錄？此動作無法復原。"
+  );
+  if (!ok) return;
+  try {
+    setSyncing(true, "刪除歷史紀錄中...");
+    const { error: delDispatchErr } = await dbQuery(
+      (signal) => supabaseClient.from("duty_dispatches").delete().eq("session_id", sessionId).abortSignal(signal),
+      { label: "刪除歷史明細", attempts: DB_WRITE_ATTEMPTS, timeoutMs: DB_WRITE_TIMEOUT_MS }
+    );
+    if (delDispatchErr) throw delDispatchErr;
+
+    const { error: delSessionErr } = await dbQuery(
+      (signal) =>
+        supabaseClient
+          .from("duty_sessions")
+          .delete()
+          .eq("id", sessionId)
+          .eq("user_id", state.user.id)
+          .abortSignal(signal),
+      { label: "刪除歷史主單", attempts: DB_WRITE_ATTEMPTS, timeoutMs: DB_WRITE_TIMEOUT_MS }
+    );
+    if (delSessionErr) throw delSessionErr;
+
+    await refresh({ showLoading: false, deferSummary: true });
+    await loadAvailableHistoryDates();
+    await loadHistoryRecords();
+    setHint(el.historyStatus, isActiveSession ? "已強制刪除進行中歷史紀錄。" : "已刪除歷史紀錄。");
+  } catch (err) {
+    setHint(el.historyStatus, `刪除失敗：${err.message}`);
+  } finally {
+    setSyncing(false);
+  }
+};
+
+const loadHistoryRecords = async () => {
+  if (!state.user || !el.historyDate?.value) return;
+  if (!state.availableHistoryDates.length) {
+    await loadAvailableHistoryDates();
+  }
+  const dateText = el.historyDate.value;
+  if (!state.availableHistoryDates.includes(dateText)) {
+    el.historyList.innerHTML = "";
+    setHint(el.historyStatus, "該日期無紀錄（不可查詢）。");
+    updateHistoryDateAvailabilityUI();
+    return;
+  }
+  const start = new Date(`${dateText}T00:00:00`);
+  if (Number.isNaN(start.getTime())) {
+    setHint(el.historyStatus, "日期格式錯誤。");
+    return;
+  }
+  const end = new Date(start);
+  end.setDate(end.getDate() + 1);
+
+  try {
+    if (el.loadHistoryBtn) el.loadHistoryBtn.disabled = true;
+    setHint(el.historyStatus, "讀取中...");
+    const { data: sessions, error: sesErr } = await dbQuery(
+      (signal) =>
+        supabaseClient
+          .from("duty_sessions")
+          .select("id,start_time,end_time,status")
+          .eq("user_id", state.user.id)
+          .gte("start_time", start.toISOString())
+          .lt("start_time", end.toISOString())
+          .order("start_time", { ascending: false })
+          .abortSignal(signal),
+      { label: "讀取歷史主單", attempts: DB_READ_ATTEMPTS, timeoutMs: DB_READ_TIMEOUT_MS }
+    );
+    if (sesErr) throw sesErr;
+    if (!sessions?.length) {
+      el.historyList.innerHTML = "";
+      setHint(el.historyStatus, "該日無紀錄。");
+      return;
+    }
+
+    const ids = sessions.map((x) => x.id);
+    const { data: rows, error: rowErr } = await dbQuery(
+      (signal) =>
+        supabaseClient
+          .from("duty_dispatches")
+          .select("*")
+          .in("session_id", ids)
+          .order("dispatch_time", { ascending: true })
+          .abortSignal(signal),
+      { label: "讀取歷史明細", attempts: DB_READ_ATTEMPTS, timeoutMs: DB_READ_TIMEOUT_MS }
+    );
+    if (rowErr) throw rowErr;
+
+    const rowsBySession = groupRowsBySession(rows || []);
+    renderHistoryList(sessions, rowsBySession);
+    setHint(el.historyStatus, `已載入 ${sessions.length} 筆勤務。`);
+  } catch (err) {
+    setHint(el.historyStatus, `讀取失敗：${err.message}`);
+  } finally {
+    if (el.loadHistoryBtn) el.loadHistoryBtn.disabled = false;
+  }
+};
+
+const toggleHistoryPanel = async (forceOpen = null) => {
+  if (!el.historyPanel || !el.historyToggleBtn) return;
+  const isOpen = !el.historyPanel.classList.contains("hidden");
+  const nextOpen = forceOpen === null ? !isOpen : Boolean(forceOpen);
+  el.historyPanel.classList.toggle("hidden", !nextOpen);
+  el.historyToggleBtn.classList.toggle("expanded", nextOpen);
+  el.historyToggleBtn.setAttribute("aria-expanded", nextOpen ? "true" : "false");
+  if (el.summaryHistory) {
+    el.summaryHistory.classList.toggle("expanded", nextOpen);
+  }
+  if (nextOpen) {
+    if (!state.availableHistoryDates.length) {
+      await loadAvailableHistoryDates();
+    }
+    await loadHistoryRecords();
+  }
+};
+
 const rowEndIso = (row) => {
   const idx = state.rows.findIndex((r) => r.id === row.id);
   const next = idx >= 0 ? state.rows[idx + 1] : null;
@@ -979,14 +1227,25 @@ const resolveStandbyInsertIso = (eventRow, finishDate) => {
 const renderTimeline = () => {
   el.timelineList.innerHTML = "";
   const noRows = !state.rows.length;
+  const hasActive = Boolean(state.session && state.session.status === "active");
   if (el.todayEmpty) {
     el.todayEmpty.classList.toggle("hidden", !noRows);
+  }
+  if (el.todayResumeWrap) {
+    const showResume = !noRows && !hasActive;
+    el.todayResumeWrap.classList.toggle("hidden", !showResume);
   }
   if (!state.rows.length) {
     if (el.startShiftBtn) {
       el.startShiftBtn.disabled = state.busy || Boolean(state.session && state.session.status === "active");
     }
+    if (el.resumeShiftBtn) {
+      el.resumeShiftBtn.disabled = true;
+    }
     return;
+  }
+  if (el.resumeShiftBtn) {
+    el.resumeShiftBtn.disabled = state.busy || hasActive;
   }
 
   state.rows.forEach((row, idx) => {
@@ -1126,6 +1385,7 @@ const startShift = async (e) => {
     state.session = data;
     await insertDispatch(standbyPayload(state.session.id, payload.start_time, "開始協勤"), "建立勤務同步中");
     await refresh();
+    await loadAvailableHistoryDates();
     setHint(el.sessionStatus, "");
   } catch (err) {
     setHint(el.sessionStatus, `開始勤務失敗：${err.message}`);
@@ -1188,6 +1448,17 @@ const openEventSheet = () => {
   setEventSheetMode("final");
   setHint(el.eventStatus, "");
   el.eventSheet.classList.remove("hidden");
+};
+
+const onSecondaryAction = async () => {
+  const mode = actionMode();
+  if (mode === "event") {
+    openEventSheet();
+    return;
+  }
+  if (mode === "standby") {
+    await checkout();
+  }
 };
 
 const openEventSheetByRowId = (rowId) => {
@@ -1323,10 +1594,6 @@ const saveEventDraft = async () => {
 };
 
 const checkout = async () => {
-  if (actionMode() === "none") {
-    await startShift();
-    return;
-  }
   if (actionMode() !== "standby") return;
   if (state.busy) return;
   if (!state.session || state.session.status !== "active") return;
@@ -1419,6 +1686,7 @@ const deleteTodayRecords = async () => {
     state.session = null;
     state.rows = [];
     await refresh({ showLoading: false });
+    await loadAvailableHistoryDates();
     addDebugLog("deleteToday.success", { count: ids.length });
     setHint(el.sessionStatus, `已刪除今日 ${ids.length} 筆主單與相關明細。`);
   } catch (err) {
@@ -1537,11 +1805,11 @@ const bind = () => {
   el.profileBtn.addEventListener("click", openProfileSheet);
   el.logoutBtn.addEventListener("click", logout);
   if (el.startShiftBtn) el.startShiftBtn.addEventListener("click", startShift);
+  if (el.resumeShiftBtn) el.resumeShiftBtn.addEventListener("click", startShift);
   if (el.sessionForm) el.sessionForm.addEventListener("submit", startShift);
   if (el.deleteTodayBtn) el.deleteTodayBtn.addEventListener("click", deleteTodayRecords);
   el.startEventBtn.addEventListener("click", startEvent);
-  el.finishEventBtn.addEventListener("click", openEventSheet);
-  el.checkoutBtn.addEventListener("click", checkout);
+  el.finishEventBtn.addEventListener("click", onSecondaryAction);
   el.saveDraftBtn.addEventListener("click", saveEventDraft);
   el.eventForm.addEventListener("submit", finishEvent);
   el.cancelEventBtn.addEventListener("click", closeEventSheet);
@@ -1582,6 +1850,42 @@ const bind = () => {
     if (!Number.isFinite(rowId)) return;
     openEventSheetByRowId(rowId);
   });
+  if (el.loadHistoryBtn) {
+    el.loadHistoryBtn.addEventListener("click", loadHistoryRecords);
+  }
+  if (el.historyToggleBtn) {
+    el.historyToggleBtn.addEventListener("click", () => {
+      toggleHistoryPanel().catch((err) => {
+        setHint(el.historyStatus, `讀取失敗：${err.message}`);
+      });
+    });
+  }
+  if (el.historyList) {
+    el.historyList.addEventListener("click", (event) => {
+      const btn = event.target.closest(".history-delete-btn");
+      if (!btn) return;
+      const sessionId = Number(btn.dataset.sessionId || "");
+      const sessionStatus = btn.dataset.sessionStatus || "";
+      if (!Number.isFinite(sessionId)) return;
+      deleteHistorySession(sessionId, sessionStatus);
+    });
+  }
+  if (el.historyDateList) {
+    el.historyDateList.addEventListener("change", () => {
+      if (!el.historyDateList.value) return;
+      el.historyDate.value = el.historyDateList.value;
+      updateHistoryDateAvailabilityUI();
+      loadHistoryRecords();
+    });
+  }
+  if (el.historyDate) {
+    el.historyDate.addEventListener("change", () => {
+      if (el.historyDateList) {
+        el.historyDateList.value = el.historyDate.value;
+      }
+      updateHistoryDateAvailabilityUI();
+    });
+  }
 };
 
 const initAuth = async () => {
@@ -1678,6 +1982,19 @@ const init = async () => {
   });
   window.addEventListener("offline", () => addDebugLog("network.offline", {}, "warn"));
   bind();
+  if (el.historyDate) {
+    el.historyDate.value = toDateInput();
+  }
+  if (el.historyPanel) {
+    el.historyPanel.classList.add("hidden");
+  }
+  if (el.historyToggleBtn) {
+    el.historyToggleBtn.classList.remove("expanded");
+    el.historyToggleBtn.setAttribute("aria-expanded", "false");
+  }
+  if (el.summaryHistory) {
+    el.summaryHistory.classList.remove("expanded");
+  }
   updatePendingStatusUI();
   applyActionMode("none");
   setEventSheetMode("final");
