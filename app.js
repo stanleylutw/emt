@@ -30,7 +30,9 @@ const state = {
   healingStandbyRows: false,
   timelineEditMode: false,
   profileLoadPromise: null,
-  refreshPromise: null
+  refreshPromise: null,
+  liveUiTimer: null,
+  liveUiLastMinute: null
 };
 
 const el = {
@@ -1042,6 +1044,32 @@ const setSummaryValues = ({ dutyMs = 0, eventCount = 0, transported = 0 }) => {
   el.sumTransported.textContent = String(transported);
 };
 
+const summarizeSessionRows = (session, rows) => {
+  const arr = Array.isArray(rows) ? rows : [];
+  let dutyMs = 0;
+  let eventCount = 0;
+  let transported = 0;
+  for (let i = 0; i < arr.length; i += 1) {
+    const cur = arr[i];
+    const next = arr[i + 1];
+    const start = new Date(cur.dispatch_time).getTime();
+    const end = next
+      ? new Date(next.dispatch_time).getTime()
+      : session?.end_time
+        ? new Date(session.end_time).getTime()
+        : Date.now();
+    dutyMs += Math.max(0, end - start);
+
+    // 規則：出勤次數/送醫人數僅在「該事件已結束」後才統計
+    const segmentClosed = Boolean(next || session?.end_time);
+    if (!isStandby(cur) && !isOpenEvent(cur) && segmentClosed) {
+      eventCount += 1;
+      transported += transportedUnits(cur);
+    }
+  }
+  return { dutyMs, eventCount, transported };
+};
+
 const rangeBoundsByType = (type) => {
   const now = new Date();
   if (type === "today") {
@@ -1082,6 +1110,13 @@ const buildSessionRowsMap = (rows) => {
 const renderSummary = async () => {
   if (!state.user) {
     setSummaryValues({});
+    return;
+  }
+
+  // 今日優先用本地資料即時計算，避免畫面短暫顯示 00:00 或遠端延遲造成不一致。
+  if (state.summaryRange === "today" && state.session) {
+    const localSummary = summarizeSessionRows(state.session, state.rows || []);
+    setSummaryValues(localSummary);
     return;
   }
 
@@ -1128,26 +1163,11 @@ const renderSummary = async () => {
   let dutyMs = 0;
   let eventCount = 0;
   let transported = 0;
-
   sessions.forEach((s) => {
-    const arr = map.get(s.id) || [];
-    for (let i = 0; i < arr.length; i += 1) {
-      const cur = arr[i];
-      const next = arr[i + 1];
-      const start = new Date(cur.dispatch_time).getTime();
-      const end = next
-        ? new Date(next.dispatch_time).getTime()
-        : s.end_time
-          ? new Date(s.end_time).getTime()
-          : Date.now();
-      const dur = Math.max(0, end - start);
-
-      dutyMs += dur;
-      if (!isStandby(cur)) {
-        eventCount += 1;
-        transported += transportedUnits(cur);
-      }
-    }
+    const part = summarizeSessionRows(s, map.get(s.id) || []);
+    dutyMs += part.dutyMs;
+    eventCount += part.eventCount;
+    transported += part.transported;
   });
 
   setSummaryValues({ dutyMs, eventCount, transported });
@@ -1716,6 +1736,22 @@ const renderAuth = () => {
   el.actionBar.classList.remove("hidden");
   applyActionMode(actionMode());
   updatePendingStatusUI();
+};
+
+const refreshLiveTimelineClock = ({ force = false } = {}) => {
+  const hasActive = Boolean(state.session?.status === "active" && (state.rows || []).length);
+  if (!hasActive) {
+    state.liveUiLastMinute = null;
+    return;
+  }
+  if (document.hidden) return;
+  const nowMinute = Math.floor(Date.now() / 60000);
+  if (!force && state.liveUiLastMinute === nowMinute) return;
+  state.liveUiLastMinute = nowMinute;
+  renderTimeline();
+  if (state.summaryRange === "today" && state.session) {
+    setSummaryValues(summarizeSessionRows(state.session, state.rows || []));
+  }
 };
 
 const refresh = async (opts = {}) => {
@@ -2728,8 +2764,20 @@ const init = async () => {
   window.addEventListener("online", async () => {
     addDebugLog("network.online");
     await processPendingQueue();
+    refreshLiveTimelineClock({ force: true });
   });
   window.addEventListener("offline", () => addDebugLog("network.offline", {}, "warn"));
+  window.addEventListener("visibilitychange", () => {
+    if (!document.hidden) {
+      refreshLiveTimelineClock({ force: true });
+    }
+  });
+  window.addEventListener("pageshow", () => {
+    refreshLiveTimelineClock({ force: true });
+  });
+  window.addEventListener("focus", () => {
+    refreshLiveTimelineClock({ force: true });
+  });
   bind();
   if (el.historyDate) {
     el.historyDate.value = toDateInput();
@@ -2753,8 +2801,12 @@ const init = async () => {
   state.pendingQueueTimer = window.setInterval(() => {
     processPendingQueue().catch(() => {});
   }, 15000);
+  state.liveUiTimer = window.setInterval(() => {
+    refreshLiveTimelineClock();
+  }, 10000);
   await initAuth();
   await processPendingQueue();
+  refreshLiveTimelineClock({ force: true });
   addDebugLog("init.done");
 };
 
