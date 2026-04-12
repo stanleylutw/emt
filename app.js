@@ -2178,7 +2178,11 @@ const startShift = async (e) => {
 const startEvent = async () => {
   if (actionMode() !== "standby") return;
   if (state.busy) return;
-  if (!acquireActionLock("startEvent", 2500)) {
+  if (state.processingPendingQueue) {
+    setHint(el.sessionStatus, "背景同步中，請稍候再按。");
+    return;
+  }
+  if (!acquireActionLock("startEvent", 6000)) {
     addDebugLog("action.lock.blocked", { action: "startEvent" }, "warn");
     return;
   }
@@ -2306,7 +2310,11 @@ const finishEvent = async (e) => {
   e.preventDefault();
   if (state.eventSheetMode !== "final") return;
   if (state.busy) return;
-  if (!acquireActionLock("finishEvent", 3000)) {
+  if (state.processingPendingQueue) {
+    setHint(el.eventStatus, "背景同步中，請稍候再按。");
+    return;
+  }
+  if (!acquireActionLock("finishEvent", 6000)) {
     addDebugLog("action.lock.blocked", { action: "finishEvent" }, "warn");
     return;
   }
@@ -2353,7 +2361,7 @@ const finishEvent = async (e) => {
 const saveEventDraft = async () => {
   if (state.eventSheetMode !== "edit") return;
   if (state.busy) return;
-  if (!acquireActionLock("saveEventDraft", 1500)) {
+  if (!acquireActionLock("saveEventDraft", 3000)) {
     addDebugLog("action.lock.blocked", { action: "saveEventDraft" }, "warn");
     return;
   }
@@ -2459,7 +2467,11 @@ const saveEventDraft = async () => {
 const checkout = async () => {
   if (actionMode() !== "standby") return;
   if (state.busy) return;
-  if (!acquireActionLock("checkout", 4000)) {
+  if (state.processingPendingQueue) {
+    setHint(el.sessionStatus, "背景同步中，請稍候再按。");
+    return;
+  }
+  if (!acquireActionLock("checkout", 7000)) {
     addDebugLog("action.lock.blocked", { action: "checkout" }, "warn");
     return;
   }
