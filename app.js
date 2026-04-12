@@ -2217,6 +2217,63 @@ const initAuth = async () => {
   addDebugLog("initAuth.start");
   let firstInitialSessionHandled = false;
   let hadSessionFromGetSession = false;
+
+  const handleAuthStateChange = async (evt, session) => {
+    addDebugLog("authState.changed", { evt, hasSession: Boolean(session) });
+    const prevUserId = state.user?.id || null;
+    const nextUserId = session?.user?.id || null;
+    // Supabase emits INITIAL_SESSION after subscription.
+    // Only skip it if we already got a valid session from getSession(),
+    // otherwise Safari may stay on login page until user clicks login again.
+    if (evt === "INITIAL_SESSION" && !firstInitialSessionHandled) {
+      firstInitialSessionHandled = true;
+      if (hadSessionFromGetSession) {
+        addDebugLog("authState.initialSession.skipped");
+        return;
+      }
+      addDebugLog("authState.initialSession.processed");
+    }
+    if (evt === "SIGNED_IN" && prevUserId && prevUserId === nextUserId) {
+      addDebugLog("authState.signedIn.sameUser.skipRefresh", { userId: nextUserId });
+      state.user = session?.user || null;
+      renderAuth();
+      return;
+    }
+
+    state.user = session?.user || null;
+    if (!state.user) {
+      clearSignedOutState();
+      await renderSummary();
+      return;
+    }
+
+    // Switch to work view immediately; load data in background.
+    renderAuth();
+
+    // Token refresh is frequent and does not require reloading all app data.
+    // Skipping avoids occasional long stalls from background auth recovery.
+    if (evt === "TOKEN_REFRESHED") {
+      addDebugLog("authState.tokenRefreshed.skipRefresh");
+      return;
+    }
+
+    await loadProfile();
+    try {
+      await refresh({ showLoading: false, loadingText: "資料載入中..." });
+      await processPendingQueue();
+    } catch (err) {
+      setHint(el.sessionStatus, `資料讀取失敗：${err.message}`);
+      addDebugLog("authState.refresh.error", { message: String(err?.message || "") }, "error");
+    }
+  };
+
+  // Register listener first to avoid missing the first OAuth callback event on iOS Safari.
+  supabaseClient.auth.onAuthStateChange((evt, session) => {
+    handleAuthStateChange(evt, session).catch((err) => {
+      addDebugLog("authState.handler.error", { message: String(err?.message || "") }, "error");
+    });
+  });
+
   let authData = null;
   try {
     const { data } = await dbQuery(() => supabaseClient.auth.getSession(), {
@@ -2254,54 +2311,6 @@ const initAuth = async () => {
       }, 2500);
     }
   }
-
-  supabaseClient.auth.onAuthStateChange(async (evt, session) => {
-    addDebugLog("authState.changed", { evt, hasSession: Boolean(session) });
-    const prevUserId = state.user?.id || null;
-    const nextUserId = session?.user?.id || null;
-    // Supabase emits INITIAL_SESSION after subscription.
-    // Only skip it if we already got a valid session from getSession(),
-    // otherwise Safari may stay on login page until user clicks login again.
-    if (evt === "INITIAL_SESSION" && !firstInitialSessionHandled) {
-      firstInitialSessionHandled = true;
-      if (hadSessionFromGetSession) {
-        addDebugLog("authState.initialSession.skipped");
-        return;
-      }
-      addDebugLog("authState.initialSession.processed");
-    }
-    if (evt === "SIGNED_IN" && prevUserId && prevUserId === nextUserId) {
-      addDebugLog("authState.signedIn.sameUser.skipRefresh", { userId: nextUserId });
-      state.user = session?.user || null;
-      return;
-    }
-
-    state.user = session?.user || null;
-    if (!state.user) {
-      clearSignedOutState();
-      await renderSummary();
-      return;
-    }
-
-    // Switch to work view immediately; load data in background.
-    renderAuth();
-
-    // Token refresh is frequent and does not require reloading all app data.
-    // Skipping avoids occasional long stalls from background auth recovery.
-    if (evt === "TOKEN_REFRESHED") {
-      addDebugLog("authState.tokenRefreshed.skipRefresh");
-      return;
-    }
-
-    await loadProfile();
-    try {
-      await refresh({ showLoading: false, loadingText: "資料載入中..." });
-      await processPendingQueue();
-    } catch (err) {
-      setHint(el.sessionStatus, `資料讀取失敗：${err.message}`);
-      addDebugLog("authState.refresh.error", { message: String(err?.message || "") }, "error");
-    }
-  });
 };
 
 const init = async () => {
