@@ -1777,12 +1777,34 @@ const deleteTodayRecords = async () => {
 const login = async () => {
   await supabaseClient.auth.signInWithOAuth({
     provider: "google",
-    options: { redirectTo: window.location.href }
+    options: { redirectTo: `${window.location.origin}${window.location.pathname}` }
   });
 };
 
+const clearSignedOutState = () => {
+  state.user = null;
+  state.session = null;
+  state.rows = [];
+  state.profile = { displayName: "", unit: "", title: "", phone: "", avatarDataUrl: "" };
+  closeEventSheet(true);
+  if (el.profileSheet) {
+    el.profileSheet.classList.add("hidden");
+  }
+  renderTimeline();
+  renderAuth();
+  updatePendingStatusUI();
+};
+
 const logout = async () => {
-  await supabaseClient.auth.signOut();
+  // Optimistic UI: switch to login view immediately even if auth event is delayed.
+  clearSignedOutState();
+  setHint(el.sessionStatus, "");
+  try {
+    await supabaseClient.auth.signOut({ scope: "local" });
+  } catch (err) {
+    addDebugLog("auth.logout.error", { message: String(err?.message || "") }, "warn");
+  }
+  await renderSummary();
 };
 
 const openProfileSheet = () => {
@@ -2024,14 +2046,13 @@ const initAuth = async () => {
 
     state.user = session?.user || null;
     if (!state.user) {
-      state.session = null;
-      state.rows = [];
-      state.profile = { displayName: "", unit: "", title: "", phone: "", avatarDataUrl: "" };
+      clearSignedOutState();
       await renderSummary();
-      renderTimeline();
-      renderAuth();
       return;
     }
+
+    // Switch to work view immediately; load data in background.
+    renderAuth();
 
     // Token refresh is frequent and does not require reloading all app data.
     // Skipping avoids occasional long stalls from background auth recovery.
