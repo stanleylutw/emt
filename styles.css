@@ -473,7 +473,7 @@ button[aria-disabled="true"] {
 .item {
   border: 0;
   border-radius: 12px;
-  padding: 14px;
+  padding: 8px 10px;
   background: #f2f5f7;
 }
 
@@ -509,13 +509,13 @@ button[aria-disabled="true"] {
   display: flex;
   align-items: center;
   gap: 6px;
-  min-width: 118px;
+  min-width: 96px;
   justify-content: flex-end;
 }
 
 .item-time {
   font-weight: 700;
-  font-size: 20px;
+  font-size: 16px;
 }
 
 .current-status {
@@ -618,10 +618,13 @@ button[aria-disabled="true"] {
 }
 
 .item-note {
-  margin-top: 10px;
+  margin-top: 4px;
   color: var(--text);
-  font-size: 18px;
-  line-height: 1.45;
+  font-size: 14px;
+  line-height: 1.25;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .hint {

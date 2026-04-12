@@ -1069,6 +1069,17 @@ const rowSummary = (row) => {
   return `${hospital || "未填"} ${count || "?"}人${complaintText}${memo}`;
 };
 
+const rowTimelineLine2 = (row) => {
+  if (isStandby(row)) {
+    return "待勤";
+  }
+  const hospital = row.hospital === "其他" ? row.hospital_custom : row.hospital;
+  const count = row.patient_count === "其他" ? row.patient_count_custom : row.patient_count;
+  const caseType = row.case_type === "其他" ? row.case_type_custom : row.case_type;
+  const complaint = (row.chief_complaint || "").trim() || "-";
+  return `${hospital || "未填"} ${count || "?"}人 ${caseType || "未填"} ${complaint}`;
+};
+
 const groupRowsBySession = (rows) => {
   const map = new Map();
   (rows || []).forEach((r) => {
@@ -1482,7 +1493,7 @@ const renderTimeline = () => {
           }
         </div>
       </div>
-      <div class="item-note">${rowSummary(row)}${isOpenEvent(row) ? "（可點擊編輯）" : ""}</div>
+      <div class="item-note">${rowTimelineLine2(row)}</div>
     `;
     el.timelineList.appendChild(item);
   });
@@ -2297,7 +2308,13 @@ const initAuth = async () => {
       return;
     }
 
-    await loadProfile();
+    const profileTask = loadProfile()
+      .then(() => {
+        renderAuth();
+      })
+      .catch((err) => {
+        addDebugLog("authState.profile.error", { message: String(err?.message || "") }, "warn");
+      });
     try {
       await refresh({ showLoading: false, loadingText: "資料載入中..." });
       await processPendingQueue();
@@ -2305,6 +2322,7 @@ const initAuth = async () => {
       setHint(el.sessionStatus, `資料讀取失敗：${err.message}`);
       addDebugLog("authState.refresh.error", { message: String(err?.message || "") }, "error");
     }
+    await profileTask;
   };
 
   // Register listener first to avoid missing the first OAuth callback event on iOS Safari.
@@ -2332,9 +2350,17 @@ const initAuth = async () => {
 
   state.user = authData?.session?.user || state.user || null;
   hadSessionFromGetSession = Boolean(authData?.session || state.user);
-  await loadProfile();
   renderAuth();
   authBootstrapDone = true;
+  const initialProfileTask = state.user
+    ? loadProfile()
+        .then(() => {
+          renderAuth();
+        })
+        .catch((err) => {
+          addDebugLog("initAuth.profile.error", { message: String(err?.message || "") }, "warn");
+        })
+    : Promise.resolve();
   if (state.user) {
     try {
       await refresh({ showLoading: true, loadingText: "資料載入中..." });
@@ -2354,6 +2380,7 @@ const initAuth = async () => {
       }, 2500);
     }
   }
+  await initialProfileTask;
 };
 
 const init = async () => {
