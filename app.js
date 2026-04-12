@@ -722,14 +722,14 @@ const standbyPayload = (sessionId, isoTime, standbyMemo = "") => ({
   seq_no: 1,
   dispatch_time: isoTime,
   vehicle: "其他",
-  vehicle_custom: "待命",
+  vehicle_custom: "待勤",
   case_type: "其他",
-  case_type_custom: "待命",
+  case_type_custom: "待勤",
   patient_count: "其他",
   patient_count_custom: "0",
   hospital: "其他",
-  hospital_custom: "待命",
-  chief_complaint: "待命",
+  hospital_custom: "待勤",
+  chief_complaint: "待勤",
   bp: null,
   spo2: null,
   equipment_used: [],
@@ -946,7 +946,7 @@ const rowSummary = (row) => {
   if (isStandby(row)) {
     const note = parseNote(row.note);
     const prefix = (note.memo || "").trim();
-    return prefix ? `${prefix} / 待命` : "待命";
+    return prefix ? `${prefix} / 待勤` : "待勤";
   }
   const hospital = row.hospital === "其他" ? row.hospital_custom : row.hospital;
   const count = row.patient_count === "其他" ? row.patient_count_custom : row.patient_count;
@@ -1351,6 +1351,7 @@ const renderTimeline = () => {
     const isCurrent = Boolean(state.session?.status === "active" && sourceIdx === state.rows.length - 1);
     if (isCurrent) {
       item.classList.add("current-task");
+      item.classList.add(isStandby(row) ? "current-standby" : "current-event");
     }
     if (!isStandby(row)) {
       item.classList.add("editable");
@@ -1362,7 +1363,7 @@ const renderTimeline = () => {
         <div class="item-actions">
           ${
             isCurrent
-              ? `<span class="current-status ${isStandby(row) ? "standby" : "event"}">${isStandby(row) ? "待命中" : "出勤中"}<span class="dots" aria-hidden="true"><span>.</span><span>.</span><span>.</span></span></span>`
+              ? `<span class="current-status ${isStandby(row) ? "standby" : "event"}">${isStandby(row) ? "待勤中" : "出勤中"}<span class="dots" aria-hidden="true"><span>.</span><span>.</span><span>.</span></span></span>`
               : !isStandby(row)
                 ? '<span class="edit-icon" aria-label="編輯">✎</span>'
                 : ""
@@ -1701,11 +1702,30 @@ const checkout = async () => {
     setHint(el.sessionStatus, "請先按「結束出勤」，再退勤。");
     return;
   }
+  const ok = window.confirm("確認退勤？");
+  if (!ok) return;
 
   try {
     setSyncing(true, "退勤同步中...");
     setModeOverride("none");
     const now = new Date().toISOString();
+    if (last && isStandby(last)) {
+      const standbyNote = parseNote(last.note);
+      const memo = String(standbyNote.memo || "").trim();
+      const nextMemo = memo.includes("退勤") ? memo : memo ? `${memo} / 退勤` : "退勤";
+      const notePayload = encodeNote({ ...standbyNote, memo: nextMemo });
+      const { error: noteErr } = await dbQuery(
+        (signal) =>
+          supabaseClient.from("duty_dispatches").update({ note: notePayload }).eq("id", last.id).abortSignal(signal),
+        {
+          label: "更新待勤註記",
+          attempts: DB_WRITE_ATTEMPTS,
+          timeoutMs: DB_WRITE_TIMEOUT_MS,
+          onRetryText: (n, total) => `退勤同步中（待勤註記重試 ${n}/${total}）...`
+        }
+      );
+      if (noteErr) throw noteErr;
+    }
     const { error } = await dbQuery(
       (signal) =>
         supabaseClient
@@ -1915,7 +1935,8 @@ const normalizeBpInput = (value) => {
   const digits = text.replace(/\D/g, "").slice(0, 6);
   if (!digits) return "";
   if (digits.length <= 3) return digits;
-  const leftLen = digits.length >= 5 ? 3 : 2;
+  // Keep systolic at 3 digits once diastolic starts (e.g. 12160 -> 121/60).
+  const leftLen = 3;
   const left = digits.slice(0, leftLen);
   const right = digits.slice(leftLen, leftLen + 3);
   return right ? `${left}/${right}` : left;
@@ -1947,6 +1968,11 @@ const bind = () => {
     });
   }
   if (el.bp) {
+    el.bp.addEventListener("focus", () => {
+      window.setTimeout(() => {
+        el.bp.select();
+      }, 0);
+    });
     el.bp.addEventListener("input", () => {
       const normalized = normalizeBpInput(el.bp.value);
       if (normalized !== el.bp.value) {
@@ -1961,6 +1987,11 @@ const bind = () => {
     });
   }
   if (el.spo2) {
+    el.spo2.addEventListener("focus", () => {
+      window.setTimeout(() => {
+        el.spo2.select();
+      }, 0);
+    });
     el.spo2.addEventListener("input", () => {
       const normalized = normalizeDigitsOnly(el.spo2.value, 3);
       if (normalized !== el.spo2.value) {
@@ -1975,6 +2006,11 @@ const bind = () => {
     });
   }
   if (el.pulse) {
+    el.pulse.addEventListener("focus", () => {
+      window.setTimeout(() => {
+        el.pulse.select();
+      }, 0);
+    });
     el.pulse.addEventListener("input", () => {
       const normalized = normalizeDigitsOnly(el.pulse.value, 3);
       if (normalized !== el.pulse.value) {
