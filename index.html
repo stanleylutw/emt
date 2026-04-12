@@ -14,7 +14,7 @@
           <div class="brand">
             <img class="brand-logo" src="assets/star-of-life.png" alt="救護標誌" />
             <div>
-              <h1 class="brand-title">救護義消執勤日誌</h1>
+              <h1 class="brand-title">救護義消協勤日誌</h1>
               <p id="brandMeta" class="brand-meta"></p>
               <p id="pendingStatus" class="pending-status hidden"></p>
             </div>
@@ -69,7 +69,10 @@
         <section class="card today-duty-card">
           <div class="today-duty-head">
             <h2>今日勤務</h2>
-            <button id="deleteTodayBtn" type="button" class="icon-btn danger-icon" aria-label="刪除今日紀錄">🗑</button>
+            <div class="today-duty-actions">
+              <button id="sortTimelineBtn" type="button" class="icon-btn ghost-icon" aria-label="切換排序（目前：新到舊）">⇅</button>
+              <button id="deleteTodayBtn" type="button" class="icon-btn danger-icon" aria-label="刪除今日紀錄">🗑</button>
+            </div>
           </div>
           <div id="todayEmpty" class="today-empty hidden">
             <button id="startShiftBtn" type="button" class="primary big-start-btn">開始協勤</button>
@@ -134,11 +137,15 @@
           <div class="tri-row vital-row">
             <label>
               血壓
-              <input id="bp" type="text" />
+              <input id="bp" type="text" inputmode="numeric" pattern="[0-9/]*" />
             </label>
             <label>
               血氧
-              <input id="spo2" type="text" />
+              <input id="spo2" type="text" inputmode="numeric" pattern="[0-9]*" />
+            </label>
+            <label>
+              脈搏
+              <input id="pulse" type="text" inputmode="numeric" pattern="[0-9]*" />
             </label>
           </div>
           <label>

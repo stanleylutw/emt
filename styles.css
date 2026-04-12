@@ -73,7 +73,8 @@ body {
 
 .brand-meta {
   margin: 2px 0 0;
-  font-size: 12px;
+  font-size: 16px;
+  line-height: 1.25;
   color: #8698a5;
 }
 
@@ -248,6 +249,12 @@ button[aria-disabled="true"] {
   margin: 0;
 }
 
+.today-duty-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .history-tab {
   line-height: 1;
 }
@@ -346,6 +353,12 @@ button[aria-disabled="true"] {
   background: #fdeaea;
   color: #9f2727;
   border: 1px solid #efc9c9;
+}
+
+.ghost-icon {
+  background: #eaf4fa;
+  color: #0b6f8d;
+  border: 1px solid #cde0ea;
 }
 
 .today-empty {
@@ -674,7 +687,24 @@ button[aria-disabled="true"] {
 }
 
 #eventSheet .vital-row {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+#eventSheet .tri-row > label,
+#eventSheet .vital-row > label {
+  min-width: 0;
+}
+
+#eventSheet select,
+#eventSheet input[type="text"] {
+  height: 40px;
+  min-width: 0;
+}
+
+#eventSheet .vital-row input {
+  width: 100%;
 }
 
 #eventSheet .equipment-collapsible {

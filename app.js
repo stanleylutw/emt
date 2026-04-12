@@ -23,7 +23,8 @@ const state = {
     avatarDataUrl: ""
   },
   profileDraftAvatarDataUrl: "",
-  availableHistoryDates: []
+  availableHistoryDates: [],
+  timelineOrder: "desc"
 };
 
 const el = {
@@ -63,6 +64,7 @@ const el = {
   taskTypeCustomWrap: document.getElementById("taskTypeCustomWrap"),
   taskTypeCustom: document.getElementById("taskTypeCustom"),
   deleteTodayBtn: document.getElementById("deleteTodayBtn"),
+  sortTimelineBtn: document.getElementById("sortTimelineBtn"),
   sessionStatus: document.getElementById("sessionStatus"),
 
   timelineList: document.getElementById("timelineList"),
@@ -83,6 +85,7 @@ const el = {
   chiefComplaint: document.getElementById("chiefComplaint"),
   bp: document.getElementById("bp"),
   spo2: document.getElementById("spo2"),
+  pulse: document.getElementById("pulse"),
   equipmentItems: Array.from(document.querySelectorAll("input[name='equipmentItem']")),
   memo: document.getElementById("memo"),
   eventStatus: document.getElementById("eventStatus"),
@@ -617,17 +620,18 @@ const applyProfileToUI = () => {
 };
 
 const parseNote = (note) => {
-  if (!note) return { segment: "event", transported: false, memo: "", open: false };
+  if (!note) return { segment: "event", transported: false, memo: "", open: false, pulse: "" };
   try {
     const parsed = JSON.parse(note);
     return {
       segment: parsed.segment || "event",
       transported: Boolean(parsed.transported),
       memo: parsed.memo || "",
-      open: Boolean(parsed.open)
+      open: Boolean(parsed.open),
+      pulse: String(parsed.pulse || "")
     };
   } catch {
-    return { segment: "event", transported: false, memo: note, open: false };
+    return { segment: "event", transported: false, memo: note, open: false, pulse: "" };
   }
 };
 
@@ -1243,6 +1247,9 @@ const fillEventForm = (row) => {
   }
   el.bp.value = row.bp || "";
   el.spo2.value = row.spo2 || "";
+  if (el.pulse) {
+    el.pulse.value = note.pulse || "";
+  }
   setEquipmentSelections(row.equipment_used || []);
   el.memo.value = note.memo || "";
   syncPatientCountByHospital();
@@ -1286,7 +1293,8 @@ const buildEventUpdatePayload = (open) => {
     note: encodeNote({
       segment: "event",
       memo: el.memo.value.trim(),
-      open
+      open,
+      pulse: el.pulse ? el.pulse.value.trim() : ""
     })
   };
 };
@@ -1305,6 +1313,12 @@ const renderTimeline = () => {
   el.timelineList.innerHTML = "";
   const noRows = !state.rows.length;
   const hasActive = Boolean(state.session && state.session.status === "active");
+  if (el.sortTimelineBtn) {
+    const isDesc = state.timelineOrder === "desc";
+    el.sortTimelineBtn.textContent = isDesc ? "↓" : "↑";
+    el.sortTimelineBtn.setAttribute("aria-label", `切換排序（目前：${isDesc ? "新到舊" : "舊到新"}）`);
+    el.sortTimelineBtn.title = isDesc ? "目前：新到舊" : "目前：舊到新";
+  }
   if (el.todayEmpty) {
     el.todayEmpty.classList.toggle("hidden", !noRows);
   }
@@ -1325,12 +1339,16 @@ const renderTimeline = () => {
     el.resumeShiftBtn.disabled = state.busy || hasActive;
   }
 
-  state.rows.forEach((row, idx) => {
-    const next = state.rows[idx + 1];
+  const rowsForRender = state.timelineOrder === "desc" ? [...state.rows].reverse() : [...state.rows];
+  const rowIndexById = new Map(state.rows.map((row, idx) => [row.id, idx]));
+
+  rowsForRender.forEach((row) => {
+    const sourceIdx = rowIndexById.get(row.id);
+    const next = typeof sourceIdx === "number" ? state.rows[sourceIdx + 1] : null;
     const end = next ? next.dispatch_time : state.session?.end_time || new Date().toISOString();
     const item = document.createElement("article");
     item.className = "item";
-    const isCurrent = Boolean(state.session?.status === "active" && idx === state.rows.length - 1);
+    const isCurrent = Boolean(state.session?.status === "active" && sourceIdx === state.rows.length - 1);
     if (isCurrent) {
       item.classList.add("current-task");
     }
@@ -1880,6 +1898,31 @@ const clearDebugLogs = () => {
   setHint(el.profileStatus, "偵錯記錄已清除。");
 };
 
+const normalizeBpInput = (value) => {
+  const text = String(value || "");
+  if (!text.trim()) return "";
+
+  if (text.includes("/")) {
+    const [leftRaw = "", rightRaw = ""] = text.split("/");
+    const left = leftRaw.replace(/\D/g, "").slice(0, 3);
+    const right = rightRaw.replace(/\D/g, "").slice(0, 3);
+    if (!left && !right) return "";
+    if (!left) return right;
+    if (!right) return left;
+    return `${left}/${right}`;
+  }
+
+  const digits = text.replace(/\D/g, "").slice(0, 6);
+  if (!digits) return "";
+  if (digits.length <= 3) return digits;
+  const leftLen = digits.length >= 5 ? 3 : 2;
+  const left = digits.slice(0, leftLen);
+  const right = digits.slice(leftLen, leftLen + 3);
+  return right ? `${left}/${right}` : left;
+};
+
+const normalizeDigitsOnly = (value, max = 3) => String(value || "").replace(/\D/g, "").slice(0, max);
+
 const bind = () => {
   if (el.startTime) el.startTime.value = toInput24h();
   if (el.fillStartNowBtn && el.startTime) {
@@ -1903,6 +1946,48 @@ const bind = () => {
       syncPatientCountByHospital();
     });
   }
+  if (el.bp) {
+    el.bp.addEventListener("input", () => {
+      const normalized = normalizeBpInput(el.bp.value);
+      if (normalized !== el.bp.value) {
+        el.bp.value = normalized;
+      }
+    });
+    el.bp.addEventListener("blur", () => {
+      const normalized = normalizeBpInput(el.bp.value);
+      if (normalized !== el.bp.value) {
+        el.bp.value = normalized;
+      }
+    });
+  }
+  if (el.spo2) {
+    el.spo2.addEventListener("input", () => {
+      const normalized = normalizeDigitsOnly(el.spo2.value, 3);
+      if (normalized !== el.spo2.value) {
+        el.spo2.value = normalized;
+      }
+    });
+    el.spo2.addEventListener("blur", () => {
+      const normalized = normalizeDigitsOnly(el.spo2.value, 3);
+      if (normalized !== el.spo2.value) {
+        el.spo2.value = normalized;
+      }
+    });
+  }
+  if (el.pulse) {
+    el.pulse.addEventListener("input", () => {
+      const normalized = normalizeDigitsOnly(el.pulse.value, 3);
+      if (normalized !== el.pulse.value) {
+        el.pulse.value = normalized;
+      }
+    });
+    el.pulse.addEventListener("blur", () => {
+      const normalized = normalizeDigitsOnly(el.pulse.value, 3);
+      if (normalized !== el.pulse.value) {
+        el.pulse.value = normalized;
+      }
+    });
+  }
 
   el.googleLoginBtn.addEventListener("click", login);
   el.profileBtn.addEventListener("click", openProfileSheet);
@@ -1911,6 +1996,12 @@ const bind = () => {
   if (el.resumeShiftBtn) el.resumeShiftBtn.addEventListener("click", startShift);
   if (el.sessionForm) el.sessionForm.addEventListener("submit", startShift);
   if (el.deleteTodayBtn) el.deleteTodayBtn.addEventListener("click", deleteTodayRecords);
+  if (el.sortTimelineBtn) {
+    el.sortTimelineBtn.addEventListener("click", () => {
+      state.timelineOrder = state.timelineOrder === "desc" ? "asc" : "desc";
+      renderTimeline();
+    });
+  }
   el.startEventBtn.addEventListener("click", startEvent);
   el.finishEventBtn.addEventListener("click", onSecondaryAction);
   el.saveDraftBtn.addEventListener("click", saveEventDraft);
