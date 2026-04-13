@@ -14,7 +14,7 @@
       <header class="topbar">
         <div class="brand-row">
           <div class="brand">
-            <img class="brand-logo" src="assets/star-of-life.png" alt="救護標誌" />
+            <img class="brand-logo" src="assets/star-of-life-transparent.png" alt="救護標誌" />
             <div>
               <h1 class="brand-title">救護義消協勤日誌</h1>
               <p id="brandMeta" class="brand-meta"></p>
@@ -22,7 +22,7 @@
             </div>
           </div>
           <button id="profileBtn" type="button" class="avatar-btn" aria-label="開啟個人資料">
-            <img id="profileAvatar" src="assets/star-of-life.png" alt="帳號頭像" />
+            <img id="profileAvatar" src="assets/star-of-life-transparent.png" alt="帳號頭像" />
           </button>
         </div>
       </header>
@@ -80,12 +80,16 @@
           <div id="summaryHistory" class="summary-history">
             <div id="historyPanel" class="history-panel hidden">
               <div class="history-controls">
+                <select id="historyGranularity" aria-label="查詢粒度">
+                  <option value="day" selected>日</option>
+                  <option value="month">月</option>
+                </select>
                 <select id="historyDateList" aria-label="有紀錄日期"></select>
-                <input id="historyDate" type="date" />
-                <button id="loadHistoryBtn" type="button" class="ghost">查詢</button>
+                <button id="historyImportBtn" type="button" class="ghost">匯入</button>
+                <input id="historyImportFile" class="hidden" type="file" accept=".txt,.csv,text/plain,text/csv" />
               </div>
+              <div id="historyLoading" class="history-loading hidden" aria-live="polite">讀取中...</div>
               <div id="historyList" class="history-list"></div>
-              <p id="historyStatus" class="hint"></p>
             </div>
           </div>
         </section>
@@ -222,15 +226,20 @@
 
     <section id="profileSheet" class="sheet hidden">
       <div class="sheet-body">
-        <h2>個人資料</h2>
+        <div class="profile-sheet-head">
+          <button id="profileBackBtn" type="button" class="profile-back-btn" aria-label="返回並儲存">‹</button>
+          <h2>個人資料</h2>
+        </div>
         <form id="profileForm" class="form">
+          <div class="avatar-preview-wrap profile-avatar-center">
+            <button id="profileAvatarPickBtn" type="button" class="avatar-pick-btn" aria-label="更換頭像">
+              <img id="profileAvatarPreview" alt="頭像預覽" />
+            </button>
+          </div>
+          <input id="profileAvatarFile" class="hidden" type="file" accept="image/png,image/jpeg" />
           <label>
             帳號
-            <input id="profileEmail" type="text" readonly />
-          </label>
-          <label>
-            顯示名稱
-            <input id="profileDisplayName" type="text" />
+            <input id="profileEmail" type="text" disabled />
           </label>
           <label>
             分隊/單位
@@ -241,19 +250,14 @@
             <input id="profileTitle" type="text" />
           </label>
           <label>
+            姓名
+            <input id="profileDisplayName" type="text" />
+          </label>
+          <label>
             聯絡電話
             <input id="profilePhone" type="text" inputmode="tel" />
           </label>
-          <label>
-            帳號 Logo（JPG/PNG）
-            <input id="profileAvatarFile" type="file" accept="image/png,image/jpeg" />
-          </label>
-          <div class="avatar-preview-wrap">
-            <img id="profileAvatarPreview" alt="頭像預覽" />
-          </div>
           <div class="sheet-actions">
-            <button id="saveProfileBtn" type="submit" class="primary">儲存</button>
-            <button id="cancelProfileBtn" type="button" class="ghost">取消</button>
             <button id="logoutBtn" type="button" class="danger">登出</button>
           </div>
           <div class="sheet-actions debug-actions">

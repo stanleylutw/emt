@@ -28,6 +28,8 @@ const state = {
   },
   profileDraftAvatarDataUrl: "",
   availableHistoryDates: [],
+  availableHistoryMonths: [],
+  historyGranularity: "day",
   timelineOrder: "desc",
   healingStandbyRows: false,
   timelineEditMode: false,
@@ -36,9 +38,11 @@ const state = {
   liveUiTimer: null,
   liveUiLastMinute: null,
   pendingQueueCache: [],
-  pendingQueueOwner: null
+  pendingQueueOwner: null,
+  historyRenderCache: {}
   ,
-  actionLocks: {}
+  actionLocks: {},
+  historyLoadingCount: 0
 };
 
 const el = {
@@ -60,11 +64,12 @@ const el = {
   summaryHistory: document.getElementById("summaryHistory"),
   historyToggleBtn: document.getElementById("historyToggleBtn"),
   historyPanel: document.getElementById("historyPanel"),
-  historyDate: document.getElementById("historyDate"),
+  historyGranularity: document.getElementById("historyGranularity"),
   historyDateList: document.getElementById("historyDateList"),
-  loadHistoryBtn: document.getElementById("loadHistoryBtn"),
+  historyImportBtn: document.getElementById("historyImportBtn"),
+  historyImportFile: document.getElementById("historyImportFile"),
+  historyLoading: document.getElementById("historyLoading"),
   historyList: document.getElementById("historyList"),
-  historyStatus: document.getElementById("historyStatus"),
 
   startShiftBtn: document.getElementById("startShiftBtn"),
   resumeShiftBtn: document.getElementById("resumeShiftBtn"),
@@ -108,15 +113,15 @@ const el = {
 
   profileSheet: document.getElementById("profileSheet"),
   profileForm: document.getElementById("profileForm"),
-  saveProfileBtn: document.getElementById("saveProfileBtn"),
+  profileBackBtn: document.getElementById("profileBackBtn"),
   profileEmail: document.getElementById("profileEmail"),
   profileDisplayName: document.getElementById("profileDisplayName"),
   profileUnit: document.getElementById("profileUnit"),
   profileTitle: document.getElementById("profileTitle"),
   profilePhone: document.getElementById("profilePhone"),
+  profileAvatarPickBtn: document.getElementById("profileAvatarPickBtn"),
   profileAvatarFile: document.getElementById("profileAvatarFile"),
   profileAvatarPreview: document.getElementById("profileAvatarPreview"),
-  cancelProfileBtn: document.getElementById("cancelProfileBtn"),
   copyDebugLogBtn: document.getElementById("copyDebugLogBtn"),
   clearDebugLogBtn: document.getElementById("clearDebugLogBtn"),
   profileStatus: document.getElementById("profileStatus"),
@@ -126,7 +131,7 @@ const el = {
   appBuildTimeText: document.getElementById("appBuildTimeText")
 };
 
-const DEFAULT_AVATAR = "assets/star-of-life.png";
+const DEFAULT_AVATAR = "assets/star-of-life-transparent.png";
 const SUMMARY_RANGE_ORDER = ["today", "month", "year", "all"];
 const DB_TIMEOUT_MS = 12000;
 const DB_MAX_ATTEMPTS = 3;
@@ -232,6 +237,7 @@ const localDbRemove = async (key) => {
 
 const pendingQueueKey = () => `pendingQueue:${state.user?.id || "guest"}`;
 const snapshotKey = () => `snapshot:${state.user?.id || "guest"}`;
+const profileCacheKey = () => `profile:${state.user?.id || "guest"}`;
 
 const persistPendingQueueAsync = () => {
   const payload = Array.isArray(state.pendingQueueCache) ? state.pendingQueueCache.slice(-PENDING_SYNC_MAX) : [];
@@ -355,6 +361,14 @@ const formatHm = (iso) => {
   return d.toLocaleTimeString("zh-TW", { hour12: false, hour: "2-digit", minute: "2-digit" });
 };
 
+const formatDurationHm = (ms) => {
+  const safeMs = Number.isFinite(ms) ? Math.max(0, ms) : 0;
+  const totalMin = Math.floor(safeMs / 60000);
+  const hh = String(Math.floor(totalMin / 60)).padStart(2, "0");
+  const mm = String(totalMin % 60).padStart(2, "0");
+  return `${hh}:${mm}`;
+};
+
 const toDateInput = (date = new Date()) => {
   const y = date.getFullYear();
   const m = pad2(date.getMonth() + 1);
@@ -366,6 +380,20 @@ const isoToDateKey = (iso) => {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "";
   return toDateInput(d);
+};
+
+const isoToMonthKey = (iso) => {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const y = d.getFullYear();
+  const m = pad2(d.getMonth() + 1);
+  return `${y}-${m}`;
+};
+
+const formatMonthDay = (iso) => {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "--/--";
+  return `${pad2(d.getMonth() + 1)}/${pad2(d.getDate())}`;
 };
 
 const dayBounds = () => {
@@ -404,6 +432,30 @@ const writeLocalProfile = (profile) => {
   }
 };
 
+const normalizeProfile = (profile) => ({
+  displayName: profile?.displayName || "",
+  unit: profile?.unit || "",
+  title: profile?.title || "",
+  phone: profile?.phone || "",
+  avatarDataUrl: profile?.avatarDataUrl || ""
+});
+
+const readCachedProfile = async () => {
+  if (!state.user) return null;
+  const fromIdb = await localDbGet(profileCacheKey());
+  if (fromIdb && typeof fromIdb === "object") {
+    return normalizeProfile(fromIdb);
+  }
+  return readLocalProfile();
+};
+
+const writeCachedProfile = async (profile) => {
+  if (!state.user) return;
+  const normalized = normalizeProfile(profile);
+  writeLocalProfile(normalized);
+  await localDbSet(profileCacheKey(), normalized);
+};
+
 const getEffectiveDisplayName = () =>
   state.profile.displayName || state.user?.user_metadata?.full_name || state.user?.email || "使用者";
 
@@ -412,6 +464,33 @@ const getEffectiveAvatar = () => state.profile.avatarDataUrl || DEFAULT_AVATAR;
 const setHint = (target, msg) => {
   if (!target) return;
   target.textContent = msg || "";
+};
+
+const triggerDownload = (filename, content, mimeType = "text/plain;charset=utf-8") => {
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 300);
+};
+
+const toCsvCell = (value) => {
+  const s = String(value ?? "");
+  if (/[",\n\r]/.test(s)) {
+    return `"${s.replace(/"/g, "\"\"")}"`;
+  }
+  return s;
+};
+
+const confirmDeleteByCode = (labelText = "刪除") => {
+  const code = String(Math.floor(Math.random() * 10000)).padStart(4, "0");
+  const input = window.prompt(`請輸入 4 位數確認碼以${labelText}：${code}`);
+  if (input === null) return false;
+  return input.trim() === code;
 };
 
 const readDebugLogs = () => {
@@ -516,6 +595,9 @@ const enqueuePendingItem = (item) => {
     writePendingQueue([...filtered, row]);
   } else if (row.type === "session_update" && row.sessionId) {
     const filtered = current.filter((x) => !(x.type === "session_update" && x.sessionId === row.sessionId));
+    writePendingQueue([...filtered, row]);
+  } else if (row.type === "profile_upsert") {
+    const filtered = current.filter((x) => x.type !== "profile_upsert");
     writePendingQueue([...filtered, row]);
   } else if (row.type === "dispatch_insert") {
     row.payload = normalizeDispatchPayloadForDb(row.payload);
@@ -711,14 +793,21 @@ const setSyncing = (on, text = "資料同步中...") => {
     el.saveDraftBtn,
     el.confirmFinishBtn,
     el.cancelEventBtn,
-    el.saveProfileBtn,
-    el.cancelProfileBtn,
+    el.profileBackBtn,
     el.deleteTodayBtn
   ].forEach((btn) => {
     if (!btn) return;
     btn.disabled = on;
   });
   renderAuth();
+};
+
+const setHistoryLoading = (on, text = "讀取中...") => {
+  if (!el.historyLoading) return;
+  state.historyLoadingCount = Math.max(0, (state.historyLoadingCount || 0) + (on ? 1 : -1));
+  const show = state.historyLoadingCount > 0;
+  el.historyLoading.textContent = text;
+  el.historyLoading.classList.toggle("hidden", !show);
 };
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -891,6 +980,21 @@ const processPendingQueue = async () => {
             }
           );
           if (error) throw error;
+        } else if (item.type === "profile_upsert") {
+          const payload = item.payload || {};
+          const { error } = await dbQuery(
+            (signal) =>
+              supabaseClient
+                .from(PROFILE_TABLE)
+                .upsert(payload, { onConflict: "user_id" })
+                .abortSignal(signal),
+            {
+              label: "待同步補送：儲存個人資料",
+              attempts: PENDING_SYNC_ATTEMPTS,
+              timeoutMs: PENDING_SYNC_TIMEOUT_MS
+            }
+          );
+          if (error) throw error;
         } else {
           removePendingItem(item.id);
           continue;
@@ -967,7 +1071,7 @@ const loadProfile = async () => {
         phone: data.phone || "",
         avatarDataUrl: data.avatar_data_url || ""
       };
-      writeLocalProfile(state.profile);
+      await writeCachedProfile(state.profile);
       return;
     }
   } catch (err) {
@@ -978,7 +1082,7 @@ const loadProfile = async () => {
     );
   }
 
-  const local = readLocalProfile();
+  const local = await readCachedProfile();
   if (local) {
     state.profile = local;
   }
@@ -996,14 +1100,20 @@ const loadProfile = async () => {
 
 const saveProfile = async () => {
   if (!state.user) return { remote: false };
+  const normalized = normalizeProfile(state.profile);
+  const cachedBefore = await readCachedProfile();
+  if (cachedBefore && JSON.stringify(normalized) === JSON.stringify(normalizeProfile(cachedBefore))) {
+    return { remote: false, skipped: true, noChange: true };
+  }
   const payload = {
     user_id: state.user.id,
-    display_name: state.profile.displayName || null,
-    unit: state.profile.unit || null,
-    title: state.profile.title || null,
-    phone: state.profile.phone || null,
-    avatar_data_url: state.profile.avatarDataUrl || null
+    display_name: normalized.displayName || null,
+    unit: normalized.unit || null,
+    title: normalized.title || null,
+    phone: normalized.phone || null,
+    avatar_data_url: normalized.avatarDataUrl || null
   };
+  await writeCachedProfile(normalized);
   try {
     const { error } = await dbQuery(
       (signal) =>
@@ -1014,7 +1124,6 @@ const saveProfile = async () => {
       { label: "儲存個人資料", attempts: DB_WRITE_ATTEMPTS, timeoutMs: DB_WRITE_TIMEOUT_MS }
     );
     if (error) throw error;
-    writeLocalProfile(state.profile);
     return { remote: true };
   } catch (err) {
     addDebugLog(
@@ -1022,8 +1131,8 @@ const saveProfile = async () => {
       { code: err?.code || null, message: String(err?.message || "") },
       "warn"
     );
-    writeLocalProfile(state.profile);
-    return { remote: false, error: err };
+    enqueuePendingItem({ type: "profile_upsert", payload });
+    return { remote: false, queued: true, error: err };
   }
 };
 
@@ -1577,6 +1686,375 @@ const rowSummary = (row) => {
   return `${hospital || "未填"} ${count || "?"}人${complaintText}${memo}`;
 };
 
+const displayHospital = (row) => (row.hospital === "其他" ? row.hospital_custom : row.hospital) || "";
+const displayPatientCount = (row) => (row.patient_count === "其他" ? row.patient_count_custom : row.patient_count) || "";
+const displayCaseType = (row) => (row.case_type === "其他" ? row.case_type_custom : row.case_type) || "";
+
+const buildSessionExportRows = (session, rows) => {
+  const list = Array.isArray(rows) ? rows : [];
+  const summary = summarizeSessionRows(session, list);
+  return list.map((row, idx) => {
+    const next = list[idx + 1];
+    const rowEndIso = next ? next.dispatch_time : session.end_time || session.start_time;
+    const note = parseNote(row.note);
+    return {
+      format_version: "EMT_SESSION_V1",
+      record_type: "dispatch",
+      session_id: session.id,
+      session_start_iso: session.start_time || "",
+      session_end_iso: session.end_time || "",
+      date_key: isoToDateKey(session.start_time),
+      duty_minutes: Math.floor(summary.dutyMs / 60000),
+      duty_hhmm: formatDurationHm(summary.dutyMs),
+      row_id: row.id || "",
+      row_index: idx + 1,
+      row_start_iso: row.dispatch_time || "",
+      row_end_iso: rowEndIso || "",
+      row_start_hm: formatHm(row.dispatch_time),
+      row_end_hm: formatHm(rowEndIso),
+      segment: note.segment || "",
+      is_open: note.open ? "1" : "0",
+      hospital: row.hospital || "",
+      hospital_custom: row.hospital_custom || "",
+      hospital_display: displayHospital(row),
+      patient_count: row.patient_count || "",
+      patient_count_custom: row.patient_count_custom || "",
+      patient_count_display: displayPatientCount(row),
+      case_type: row.case_type || "",
+      case_type_custom: row.case_type_custom || "",
+      case_type_display: displayCaseType(row),
+      chief_complaint: row.chief_complaint || "",
+      memo: note.memo || "",
+      bp: row.bp || "",
+      spo2: row.spo2 || "",
+      pulse: note.pulse || "",
+      equipment_used_json: JSON.stringify(Array.isArray(row.equipment_used) ? row.equipment_used : []),
+      note_json: row.note || ""
+    };
+  });
+};
+
+const exportHistorySession = (sessionId, fmt) => {
+  const key = String(sessionId || "");
+  const cache = state.historyRenderCache?.[key];
+  if (!cache) {
+    setHint(el.sessionStatus, "找不到可匯出的資料。");
+    return;
+  }
+  const { session, rows } = cache;
+  if (!["txt", "csv"].includes(fmt)) {
+    setHint(el.sessionStatus, "匯出格式錯誤。");
+    return;
+  }
+
+  const exportRows = buildSessionExportRows(session, rows);
+  const endText = session.end_time ? formatHm(session.end_time) : "進行中";
+  const summary = summarizeSessionRows(session, rows || []);
+  const summaryDate = formatMonthDay(session.start_time);
+  const summaryTime = `${formatHm(session.start_time)} - ${endText}`;
+  const summaryDuty = formatDurationHm(summary.dutyMs);
+  const summaryUnit = String(state.profile?.unit || "").trim();
+  const summaryTitle = String(state.profile?.title || "").trim();
+  const summaryDisplayName = String(
+    state.profile?.displayName || session.display_name || getEffectiveDisplayName()
+  ).trim();
+  const summaryDetailLines = (rows || []).map((row, idx, arr) => {
+    const next = arr[idx + 1];
+    const rowEnd = next ? next.dispatch_time : session.end_time || session.start_time;
+    return `${formatHm(row.dispatch_time)} - ${formatHm(rowEnd)}  ${rowSummary(row)}`;
+  });
+  const baseDate = isoToDateKey(session.start_time).replaceAll("-", "");
+  const filenameBase = `emt_session_${baseDate}_${session.id}`;
+
+  if (fmt === "csv") {
+    const headers = [
+      "format_version",
+      "record_type",
+      "session_id",
+      "session_start_iso",
+      "session_end_iso",
+      "date_key",
+      "duty_minutes",
+      "duty_hhmm",
+      "row_id",
+      "row_index",
+      "row_start_iso",
+      "row_end_iso",
+      "row_start_hm",
+      "row_end_hm",
+      "segment",
+      "is_open",
+      "hospital",
+      "hospital_custom",
+      "hospital_display",
+      "patient_count",
+      "patient_count_custom",
+      "patient_count_display",
+      "case_type",
+      "case_type_custom",
+      "case_type_display",
+      "chief_complaint",
+      "memo",
+      "bp",
+      "spo2",
+      "pulse",
+      "equipment_used_json",
+      "note_json"
+    ];
+    const lines = [
+      `# 摘要日期,${toCsvCell(summaryDate)}`,
+      `# 摘要時間,${toCsvCell(summaryTime)}`,
+      `# 勤務時數,${toCsvCell(summaryDuty)}`,
+      `# 單位,${toCsvCell(summaryUnit)}`,
+      `# 職稱,${toCsvCell(summaryTitle)}`,
+      `# 姓名,${toCsvCell(summaryDisplayName)}`,
+      ...summaryDetailLines.map((line) => `# 明細,${toCsvCell(line)}`),
+      "",
+      headers.join(","),
+      ...exportRows.map((row) => headers.map((h) => toCsvCell(row[h])).join(","))
+    ];
+    triggerDownload(`${filenameBase}.csv`, lines.join("\n"), "text/csv;charset=utf-8");
+    setHint(el.sessionStatus, "已匯出 CSV。");
+    return;
+  }
+
+  const txtLines = [];
+  txtLines.push("=== 簡易摘要 ===");
+  txtLines.push(`日期: ${summaryDate}`);
+  txtLines.push(`時間: ${summaryTime}`);
+  txtLines.push(`勤務時數: ${summaryDuty}`);
+  txtLines.push(`單位: ${summaryUnit}`);
+  txtLines.push(`職稱: ${summaryTitle}`);
+  txtLines.push(`姓名: ${summaryDisplayName}`);
+  txtLines.push("明細:");
+  summaryDetailLines.forEach((line) => {
+    txtLines.push(`- ${line}`);
+  });
+  txtLines.push("");
+  txtLines.push("=== 協定資料 EMT_SESSION_V1 ===");
+  txtLines.push("EMT_EXPORT_FORMAT=EMT_SESSION_V1");
+  txtLines.push("EXPORT_SCOPE=session");
+  txtLines.push(`SESSION_ID=${session.id}`);
+  txtLines.push(`DATE=${isoToDateKey(session.start_time)}`);
+  txtLines.push(`SESSION_START_ISO=${session.start_time || ""}`);
+  txtLines.push(`SESSION_END_ISO=${session.end_time || ""}`);
+  txtLines.push(`DUTY_HHMM=${formatDurationHm(summary.dutyMs)}`);
+  txtLines.push(`DUTY_MINUTES=${Math.floor(summary.dutyMs / 60000)}`);
+  txtLines.push(`ROW_COUNT=${exportRows.length}`);
+  exportRows.forEach((row) => {
+    txtLines.push("");
+    txtLines.push(`[ROW_${row.row_index}]`);
+    Object.entries(row).forEach(([k, v]) => {
+      txtLines.push(`${k}=${String(v ?? "").replace(/\n/g, "\\n")}`);
+    });
+  });
+  triggerDownload(`${filenameBase}.txt`, txtLines.join("\n"), "text/plain;charset=utf-8");
+  setHint(el.sessionStatus, "已匯出 TXT。");
+};
+
+const parseImportedCsv = (text) => {
+  const lines = String(text || "").replace(/\r/g, "").split("\n");
+  const dataLines = lines.filter((line) => line.trim() && !line.trim().startsWith("#"));
+  if (!dataLines.length) return [];
+  const parseCsvLine = (line) => {
+    const out = [];
+    let cur = "";
+    let inQuote = false;
+    for (let i = 0; i < line.length; i += 1) {
+      const ch = line[i];
+      if (inQuote) {
+        if (ch === '"' && line[i + 1] === '"') {
+          cur += '"';
+          i += 1;
+        } else if (ch === '"') {
+          inQuote = false;
+        } else {
+          cur += ch;
+        }
+      } else if (ch === '"') {
+        inQuote = true;
+      } else if (ch === ",") {
+        out.push(cur);
+        cur = "";
+      } else {
+        cur += ch;
+      }
+    }
+    out.push(cur);
+    return out;
+  };
+  const header = parseCsvLine(dataLines[0]).map((h, idx) => {
+    const trimmed = h.trim();
+    return idx === 0 ? trimmed.replace(/^\uFEFF/, "") : trimmed;
+  });
+  return dataLines.slice(1).map((line) => {
+    const cells = parseCsvLine(line);
+    const obj = {};
+    header.forEach((h, idx) => {
+      obj[h] = cells[idx] ?? "";
+    });
+    return obj;
+  });
+};
+
+const parseImportedTxt = (text) => {
+  const lines = String(text || "").replace(/\r/g, "").split("\n");
+  const rows = [];
+  let cur = null;
+  lines.forEach((raw) => {
+    const line = raw.trim();
+    if (!line) return;
+    if (/^\[ROW_\d+\]$/i.test(line)) {
+      if (cur) rows.push(cur);
+      cur = {};
+      return;
+    }
+    const eq = line.indexOf("=");
+    if (eq <= 0) return;
+    const key = line.slice(0, eq).trim();
+    const value = line.slice(eq + 1).replace(/\\n/g, "\n");
+    if (!cur) cur = {};
+    cur[key] = value;
+  });
+  if (cur) rows.push(cur);
+  return rows;
+};
+
+const normalizeImportedRows = (rawRows) => {
+  const rows = (rawRows || []).filter(Boolean).filter((r) => String(r.format_version || "EMT_SESSION_V1") === "EMT_SESSION_V1");
+  return rows
+    .map((r) => ({
+      session_start_iso: r.session_start_iso || "",
+      session_end_iso: r.session_end_iso || "",
+      row_start_iso: r.row_start_iso || "",
+      row_end_iso: r.row_end_iso || "",
+      segment: r.segment || "event",
+      is_open: String(r.is_open || "0") === "1",
+      hospital: r.hospital || "其他",
+      hospital_custom: r.hospital_custom || null,
+      patient_count: r.patient_count || "1",
+      patient_count_custom: r.patient_count_custom || null,
+      case_type: r.case_type || "外科",
+      case_type_custom: r.case_type_custom || null,
+      chief_complaint: r.chief_complaint || "",
+      memo: r.memo || "",
+      bp: r.bp || null,
+      spo2: r.spo2 || null,
+      pulse: r.pulse || "",
+      equipment_used_json: r.equipment_used_json || "[]",
+      note_json: r.note_json || ""
+    }))
+    .filter((r) => r.row_start_iso);
+};
+
+const importHistoryRows = async (rows) => {
+  if (!state.user) throw new Error("尚未登入");
+  if (!rows.length) throw new Error("找不到可匯入明細");
+
+  const sorted = [...rows].sort((a, b) => new Date(a.row_start_iso) - new Date(b.row_start_iso));
+  const first = sorted[0];
+  const startIso = first.session_start_iso || first.row_start_iso;
+  const endIso = first.session_end_iso || "";
+
+  const sessionPayload = {
+    user_id: state.user.id,
+    display_name: state.profile.displayName || getEffectiveDisplayName(),
+    start_time: startIso,
+    task_type: "協勤",
+    task_type_custom: null,
+    status: endIso ? "completed" : "active",
+    end_time: endIso || null
+  };
+
+  const { data: newSession, error: sessionErr } = await dbQuery(
+    (signal) =>
+      supabaseClient
+        .from("duty_sessions")
+        .insert([sessionPayload])
+        .select("*")
+        .single()
+        .abortSignal(signal),
+    { label: "匯入勤務主單", attempts: DB_WRITE_ATTEMPTS, timeoutMs: DB_WRITE_TIMEOUT_MS }
+  );
+  if (sessionErr || !newSession?.id) throw sessionErr || new Error("匯入主單失敗");
+
+  for (const row of sorted) {
+    let equipmentUsed = [];
+    try {
+      const parsed = JSON.parse(String(row.equipment_used_json || "[]"));
+      equipmentUsed = Array.isArray(parsed) ? parsed : [];
+    } catch {
+      equipmentUsed = [];
+    }
+    let note = row.note_json;
+    if (!note) {
+      note = encodeNote({
+        segment: row.segment || "event",
+        memo: row.memo || "",
+        open: Boolean(row.is_open),
+        pulse: row.pulse || ""
+      });
+    }
+    const dispatchPayload = {
+      session_id: newSession.id,
+      dispatch_time: row.row_start_iso,
+      vehicle: "其他",
+      vehicle_custom: "未填",
+      case_type: row.case_type || "外科",
+      case_type_custom: row.case_type_custom || null,
+      patient_count: row.patient_count || "1",
+      patient_count_custom: row.patient_count_custom || null,
+      hospital: row.hospital || "其他",
+      hospital_custom: row.hospital_custom || null,
+      chief_complaint: row.chief_complaint || "",
+      bp: row.bp || null,
+      spo2: row.spo2 || null,
+      equipment_used: equipmentUsed,
+      note
+    };
+    await insertDispatch(dispatchPayload, "匯入勤務明細");
+  }
+};
+
+const onHistoryImportClick = () => {
+  if (!el.historyImportFile || state.busy) return;
+  el.historyImportFile.value = "";
+  el.historyImportFile.click();
+};
+
+const onHistoryImportFileChange = async () => {
+  const file = el.historyImportFile?.files?.[0];
+  if (!file) return;
+  const name = String(file.name || "").toLowerCase();
+  const text = await file.text();
+  let rawRows = [];
+  if (name.endsWith(".csv")) {
+    rawRows = parseImportedCsv(text);
+  } else if (name.endsWith(".txt")) {
+    rawRows = parseImportedTxt(text);
+  } else {
+    setHint(el.sessionStatus, "僅支援匯入 txt/csv。");
+    return;
+  }
+  const rows = normalizeImportedRows(rawRows);
+  if (!rows.length) {
+    setHint(el.sessionStatus, "檔案中沒有可匯入的 EMT_SESSION_V1 明細。");
+    return;
+  }
+  try {
+    setSyncing(true, "匯入中...");
+    await importHistoryRows(rows);
+    await refresh({ showLoading: false, deferSummary: true });
+    await loadAvailableHistoryDates();
+    await loadHistoryRecords();
+    setHint(el.sessionStatus, `匯入完成，共 ${rows.length} 筆明細。`);
+  } catch (err) {
+    setHint(el.sessionStatus, `匯入失敗：${String(err?.message || err || "")}`);
+  } finally {
+    setSyncing(false);
+  }
+};
+
 const rowTimelineLine2 = (row) => {
   if (isStandby(row)) {
     return "待勤";
@@ -1628,29 +2106,33 @@ const groupRowsBySession = (rows) => {
 };
 
 const updateHistoryDateAvailabilityUI = () => {
-  const selected = el.historyDate?.value || "";
-  const availableSet = new Set(state.availableHistoryDates || []);
+  if (!el.historyDateList) return;
+  const granularity = state.historyGranularity === "month" ? "month" : "day";
+  const selected = el.historyDateList.value || "";
+  const availableSet = new Set(
+    granularity === "month" ? state.availableHistoryMonths || [] : state.availableHistoryDates || []
+  );
   const isAvailable = availableSet.has(selected);
-  if (el.loadHistoryBtn) {
-    el.loadHistoryBtn.disabled = !selected || !isAvailable;
-  }
-  if (!selected) {
-    setHint(el.historyStatus, "請先選日期。");
+  const pool = granularity === "month" ? state.availableHistoryMonths || [] : state.availableHistoryDates || [];
+  if (!selected && pool.length) {
+    el.historyDateList.value = pool[0];
     return;
   }
-  if (!isAvailable) {
-    setHint(el.historyStatus, "該日期無紀錄（不可查詢）。");
+  if (selected && !isAvailable && pool.length) {
+    el.historyDateList.value = pool[0];
   }
 };
 
 const renderHistoryDateList = () => {
   if (!el.historyDateList) return;
-  const dates = state.availableHistoryDates || [];
-  if (!dates.length) {
-    el.historyDateList.innerHTML = `<option value="">無紀錄日期</option>`;
+  const granularity = state.historyGranularity === "month" ? "month" : "day";
+  const optionsPool = granularity === "month" ? state.availableHistoryMonths || [] : state.availableHistoryDates || [];
+  const emptyText = granularity === "month" ? "無紀錄月份" : "無紀錄日期";
+  if (!optionsPool.length) {
+    el.historyDateList.innerHTML = `<option value="">${emptyText}</option>`;
     return;
   }
-  const options = dates
+  const options = optionsPool
     .map((d) => `<option value="${d}">${d}</option>`)
     .join("");
   el.historyDateList.innerHTML = options;
@@ -1658,69 +2140,114 @@ const renderHistoryDateList = () => {
 
 const loadAvailableHistoryDates = async () => {
   if (!state.user) return;
-  const { data, error } = await dbQuery(
-    (signal) =>
-      supabaseClient
-        .from("duty_sessions")
-        .select("start_time")
-        .eq("user_id", state.user.id)
-        .order("start_time", { ascending: false })
-        .abortSignal(signal),
-    { label: "讀取可查日期", attempts: DB_READ_ATTEMPTS, timeoutMs: DB_READ_TIMEOUT_MS }
-  );
-  if (error) throw error;
-  const uniq = Array.from(
-    new Set((data || []).map((row) => isoToDateKey(row.start_time)).filter(Boolean))
-  ).sort((a, b) => (a < b ? 1 : -1));
-  state.availableHistoryDates = uniq;
-  renderHistoryDateList();
-  if (!el.historyDate?.value || !uniq.includes(el.historyDate.value)) {
-    el.historyDate.value = uniq[0] || "";
+  setHistoryLoading(true, "讀取可查日期中...");
+  try {
+    const { data, error } = await dbQuery(
+      (signal) =>
+        supabaseClient
+          .from("duty_sessions")
+          .select("start_time")
+          .eq("user_id", state.user.id)
+          .order("start_time", { ascending: false })
+          .abortSignal(signal),
+      { label: "讀取可查日期", attempts: DB_READ_ATTEMPTS, timeoutMs: DB_READ_TIMEOUT_MS }
+    );
+    if (error) throw error;
+    const uniq = Array.from(
+      new Set((data || []).map((row) => isoToDateKey(row.start_time)).filter(Boolean))
+    ).sort((a, b) => (a < b ? 1 : -1));
+    const uniqMonths = Array.from(
+      new Set((data || []).map((row) => isoToMonthKey(row.start_time)).filter(Boolean))
+    ).sort((a, b) => (a < b ? 1 : -1));
+    state.availableHistoryDates = uniq;
+    state.availableHistoryMonths = uniqMonths;
+    renderHistoryDateList();
+    if (el.historyDateList) {
+      const pool = state.historyGranularity === "month" ? uniqMonths : uniq;
+      if (!el.historyDateList.value || !pool.includes(el.historyDateList.value)) {
+        el.historyDateList.value = pool[0] || "";
+      }
+    }
+    updateHistoryDateAvailabilityUI();
+  } finally {
+    setHistoryLoading(false);
   }
-  if (el.historyDateList) {
-    el.historyDateList.value = el.historyDate.value || "";
-  }
-  updateHistoryDateAvailabilityUI();
 };
 
 const renderHistoryList = (sessions, rowsBySession) => {
   if (!el.historyList) return;
   el.historyList.innerHTML = "";
+  state.historyRenderCache = {};
   sessions.forEach((session) => {
     const card = document.createElement("article");
     card.className = "history-session";
 
     const head = document.createElement("div");
     head.className = "history-session-head";
+    head.classList.add("with-date");
+    const sessionRows = rowsBySession.get(session.id) || [];
+    state.historyRenderCache[String(session.id)] = {
+      session: { ...session },
+      rows: [...sessionRows]
+    };
+    const summary = summarizeSessionRows(session, sessionRows);
+    const dutyText = formatDurationHm(summary.dutyMs);
     const endText = session.end_time ? formatHm(session.end_time) : "進行中";
     head.innerHTML = `
-      <span>${formatHm(session.start_time)} - ${endText}</span>
+      <div class="history-session-head-main">
+        <span class="history-session-date">${formatMonthDay(session.start_time)}</span>
+        <div class="history-session-subline">
+          <span class="history-session-time">${formatHm(session.start_time)} - ${endText}</span>
+          <span class="history-session-duty">[ ${dutyText} ]</span>
+        </div>
+      </div>
+    `;
+    card.appendChild(head);
+    const actions = document.createElement("div");
+    actions.className = "history-session-actions";
+    actions.innerHTML = `
+      <button
+        type="button"
+        class="history-export-btn history-export-toggle"
+        data-session-id="${session.id}"
+        aria-label="匯出這筆歷史紀錄"
+        title="匯出"
+      >⤓</button>
+      <div class="history-export-menu hidden" data-session-id="${session.id}">
+        <button type="button" class="history-export-item" data-format="txt" data-session-id="${session.id}">TXT</button>
+        <button type="button" class="history-export-item" data-format="csv" data-session-id="${session.id}">CSV</button>
+      </div>
       <button
         type="button"
         class="history-delete-btn"
         data-session-id="${session.id}"
         data-session-status="${session.status || ""}"
         aria-label="刪除此筆歷史紀錄"
-      >
-        刪除
-      </button>
+        title="刪除"
+      >×</button>
     `;
-    card.appendChild(head);
+    card.appendChild(actions);
 
-    const rows = rowsBySession.get(session.id) || [];
+    const rows = sessionRows;
     rows.forEach((row, idx) => {
       const line = document.createElement("div");
       line.className = "history-row";
       const next = rows[idx + 1];
       const rowEnd = next ? next.dispatch_time : session.end_time || session.start_time;
-      line.textContent = `${formatHm(row.dispatch_time)} - ${formatHm(rowEnd)}　${rowSummary(row)}`;
+      line.innerHTML = `
+        <span class="history-row-time">${formatHm(row.dispatch_time)} - ${formatHm(rowEnd)}</span>
+        <span class="history-row-text">${escapeHtml(rowSummary(row))}</span>
+      `;
       card.appendChild(line);
     });
 
     if (!rows.length) {
       const empty = document.createElement("div");
       empty.className = "history-row";
-      empty.textContent = "無明細";
+      empty.innerHTML = `
+        <span class="history-row-time">--:-- - --:--</span>
+        <span class="history-row-text">無明細</span>
+      `;
       card.appendChild(empty);
     }
 
@@ -1730,13 +2257,11 @@ const renderHistoryList = (sessions, rowsBySession) => {
 
 const deleteHistorySession = async (sessionId, sessionStatus = "") => {
   if (!state.user || !sessionId) return;
-  const isActiveSession = sessionStatus === "active";
-  const ok = window.confirm(
-    isActiveSession
-      ? "此筆紀錄目前顯示進行中，是否強制刪除？此動作無法復原。"
-      : "確認刪除這筆歷史紀錄？此動作無法復原。"
-  );
-  if (!ok) return;
+  const codeOk = confirmDeleteByCode("刪除這筆歷史紀錄");
+  if (!codeOk) {
+    setHint(el.sessionStatus, "確認碼錯誤，刪除失敗！");
+    return;
+  }
   try {
     setSyncing(true, "刪除歷史紀錄中...");
     const { error: delDispatchErr } = await dbQuery(
@@ -1760,37 +2285,52 @@ const deleteHistorySession = async (sessionId, sessionStatus = "") => {
     await refresh({ showLoading: false, deferSummary: true });
     await loadAvailableHistoryDates();
     await loadHistoryRecords();
-    setHint(el.historyStatus, isActiveSession ? "已強制刪除進行中歷史紀錄。" : "已刪除歷史紀錄。");
+    setHint(el.sessionStatus, "已刪除。");
   } catch (err) {
-    setHint(el.historyStatus, `刪除失敗：${err.message}`);
+    setHint(el.sessionStatus, `刪除失敗：${err.message}`);
   } finally {
     setSyncing(false);
   }
 };
 
 const loadHistoryRecords = async () => {
-  if (!state.user || !el.historyDate?.value) return;
-  if (!state.availableHistoryDates.length) {
-    await loadAvailableHistoryDates();
-  }
-  const dateText = el.historyDate.value;
-  if (!state.availableHistoryDates.includes(dateText)) {
-    el.historyList.innerHTML = "";
-    setHint(el.historyStatus, "該日期無紀錄（不可查詢）。");
-    updateHistoryDateAvailabilityUI();
-    return;
-  }
-  const start = new Date(`${dateText}T00:00:00`);
-  if (Number.isNaN(start.getTime())) {
-    setHint(el.historyStatus, "日期格式錯誤。");
-    return;
-  }
-  const end = new Date(start);
-  end.setDate(end.getDate() + 1);
-
+  if (!state.user || !el.historyDateList?.value) return;
+  setHistoryLoading(true, "讀取歷史紀錄中...");
   try {
-    if (el.loadHistoryBtn) el.loadHistoryBtn.disabled = true;
-    setHint(el.historyStatus, "讀取中...");
+    if (!state.availableHistoryDates.length) {
+      await loadAvailableHistoryDates();
+    }
+    const granularity = state.historyGranularity === "month" ? "month" : "day";
+    const dateText = el.historyDateList.value;
+    const availablePool = granularity === "month" ? state.availableHistoryMonths || [] : state.availableHistoryDates || [];
+    if (!availablePool.includes(dateText)) {
+      el.historyList.innerHTML = "";
+      updateHistoryDateAvailabilityUI();
+      return;
+    }
+    let start = null;
+    let end = null;
+    if (granularity === "month") {
+      const m = String(dateText || "").match(/^(\d{4})-(\d{2})$/);
+      if (!m) {
+        setHint(el.sessionStatus, "月份格式錯誤。");
+        return;
+      }
+      const y = Number(m[1]);
+      const mon = Number(m[2]);
+      start = new Date(y, mon - 1, 1);
+      end = new Date(y, mon, 1);
+    } else {
+      start = new Date(`${dateText}T00:00:00`);
+      end = new Date(start);
+      end.setDate(end.getDate() + 1);
+    }
+    if (Number.isNaN(start?.getTime()) || Number.isNaN(end?.getTime())) {
+      setHint(el.sessionStatus, "日期格式錯誤。");
+      return;
+    }
+
+    const sessionAscending = granularity === "month";
     const { data: sessions, error: sesErr } = await dbQuery(
       (signal) =>
         supabaseClient
@@ -1799,14 +2339,13 @@ const loadHistoryRecords = async () => {
           .eq("user_id", state.user.id)
           .gte("start_time", start.toISOString())
           .lt("start_time", end.toISOString())
-          .order("start_time", { ascending: false })
+          .order("start_time", { ascending: sessionAscending })
           .abortSignal(signal),
       { label: "讀取歷史主單", attempts: DB_READ_ATTEMPTS, timeoutMs: DB_READ_TIMEOUT_MS }
     );
     if (sesErr) throw sesErr;
     if (!sessions?.length) {
       el.historyList.innerHTML = "";
-      setHint(el.historyStatus, "該日無紀錄。");
       return;
     }
 
@@ -1825,11 +2364,10 @@ const loadHistoryRecords = async () => {
 
     const rowsBySession = groupRowsBySession(rows || []);
     renderHistoryList(sessions, rowsBySession);
-    setHint(el.historyStatus, `已載入 ${sessions.length} 筆勤務。`);
   } catch (err) {
-    setHint(el.historyStatus, `讀取失敗：${err.message}`);
+    setHint(el.sessionStatus, `讀取歷史紀錄失敗：${err.message}`);
   } finally {
-    if (el.loadHistoryBtn) el.loadHistoryBtn.disabled = false;
+    setHistoryLoading(false);
   }
 };
 
@@ -2067,7 +2605,7 @@ const renderTimeline = () => {
               : state.timelineEditMode
                 ? `
                   <button type="button" class="action-icon edit row-action-btn" data-action="edit" data-row-id="${row.id}" aria-label="編輯">✎</button>
-                  <button type="button" class="action-icon delete row-action-btn" data-action="delete" data-row-id="${row.id}" aria-label="刪除">🗑</button>
+                  <button type="button" class="action-icon delete row-action-btn" data-action="delete" data-row-id="${row.id}" aria-label="刪除">×</button>
                 `
                 : ""
           }
@@ -2092,8 +2630,11 @@ const deleteDispatchRow = async (rowId) => {
   }
   const row = (state.rows || []).find((x) => String(x.id) === String(rowId));
   if (!row) return;
-  const ok = window.confirm("確認刪除這筆紀錄？");
-  if (!ok) return;
+  const codeOk = confirmDeleteByCode("刪除這筆紀錄");
+  if (!codeOk) {
+    setHint(el.sessionStatus, "確認碼錯誤，刪除失敗！");
+    return;
+  }
   if (isLocalRowId(row.id)) {
     removePendingInsertByLocalRowId(row.id);
   } else {
@@ -2602,8 +3143,11 @@ const checkout = async () => {
 
 const deleteTodayRecords = async () => {
   if (!state.user || state.busy) return;
-  const ok = window.confirm("確認刪除今日全部紀錄？此動作暫時無法復原。");
-  if (!ok) return;
+  const codeOk = confirmDeleteByCode("刪除今日全部紀錄");
+  if (!codeOk) {
+    setHint(el.sessionStatus, "確認碼錯誤，刪除失敗！");
+    return;
+  }
 
   setHint(el.sessionStatus, "");
   addDebugLog("deleteToday.start");
@@ -2714,9 +3258,8 @@ const openProfileSheet = () => {
   el.profileSheet.classList.remove("hidden");
 };
 
-const closeProfileSheet = () => {
-  if (state.busy) return;
-  el.profileForm.reset();
+const closeProfileSheet = (force = false) => {
+  if (state.busy && !force) return;
   setHint(el.profileStatus, "");
   el.profileSheet.classList.add("hidden");
 };
@@ -2733,13 +3276,13 @@ const onProfileAvatarFileChange = async () => {
   reader.onload = () => {
     state.profileDraftAvatarDataUrl = String(reader.result || "");
     el.profileAvatarPreview.src = state.profileDraftAvatarDataUrl || DEFAULT_AVATAR;
-    setHint(el.profileStatus, "新頭像已載入，按「儲存」套用。");
+    setHint(el.profileStatus, "新頭像已載入。");
   };
   reader.readAsDataURL(file);
 };
 
 const submitProfile = async (e) => {
-  e.preventDefault();
+  if (e?.preventDefault) e.preventDefault();
   state.profile = {
     displayName: el.profileDisplayName.value.trim(),
     unit: el.profileUnit.value.trim(),
@@ -2749,8 +3292,46 @@ const submitProfile = async (e) => {
   };
   const result = await saveProfile();
   applyProfileToUI();
-  setHint(el.profileStatus, result.remote ? "已儲存（雲端同步）。" : "已儲存（本機，雲端稍後再試）。");
-  closeProfileSheet();
+  if (result.noChange) {
+    setHint(el.profileStatus, "無變更。");
+  } else {
+    setHint(el.profileStatus, result.remote ? "已儲存。" : "已儲存（本機，雲端稍後再試）。");
+  }
+  return result;
+};
+
+const saveAndCloseProfileSheet = async () => {
+  if (!state.user || state.busy) return;
+  try {
+    setSyncing(true, "儲存個人資料中...");
+    await submitProfile();
+    closeProfileSheet(true);
+  } catch (err) {
+    setHint(el.profileStatus, `儲存失敗：${String(err?.message || err || "")}`);
+  } finally {
+    setSyncing(false);
+  }
+};
+
+const pickProfileAvatar = () => {
+  if (!el.profileAvatarFile || state.busy) return;
+  el.profileAvatarFile.click();
+};
+
+const onProfileBack = async () => {
+  await saveAndCloseProfileSheet();
+};
+
+const onProfileFormSubmit = async (event) => {
+  if (event?.preventDefault) event.preventDefault();
+  await onProfileBack();
+};
+
+const onProfileLogout = async () => {
+  if (!state.busy) {
+    closeProfileSheet();
+  }
+  await logout();
 };
 
 const copyDebugLogs = async () => {
@@ -2883,7 +3464,7 @@ const bind = () => {
 
   el.googleLoginBtn.addEventListener("click", login);
   el.profileBtn.addEventListener("click", openProfileSheet);
-  el.logoutBtn.addEventListener("click", logout);
+  el.logoutBtn.addEventListener("click", onProfileLogout);
   if (el.startShiftBtn) el.startShiftBtn.addEventListener("click", startShift);
   if (el.resumeShiftBtn) el.resumeShiftBtn.addEventListener("click", startShift);
   if (el.sessionForm) el.sessionForm.addEventListener("submit", startShift);
@@ -2899,9 +3480,10 @@ const bind = () => {
   el.saveDraftBtn.addEventListener("click", saveEventDraft);
   el.eventForm.addEventListener("submit", finishEvent);
   el.cancelEventBtn.addEventListener("click", closeEventSheet);
-  el.profileForm.addEventListener("submit", submitProfile);
+  el.profileForm.addEventListener("submit", onProfileFormSubmit);
+  if (el.profileBackBtn) el.profileBackBtn.addEventListener("click", onProfileBack);
+  if (el.profileAvatarPickBtn) el.profileAvatarPickBtn.addEventListener("click", pickProfileAvatar);
   el.profileAvatarFile.addEventListener("change", onProfileAvatarFileChange);
-  el.cancelProfileBtn.addEventListener("click", closeProfileSheet);
   if (el.copyDebugLogBtn) el.copyDebugLogBtn.addEventListener("click", copyDebugLogs);
   if (el.clearDebugLogBtn) el.clearDebugLogBtn.addEventListener("click", clearDebugLogs);
   el.summaryTabs.addEventListener("click", async (event) => {
@@ -2949,18 +3531,39 @@ const bind = () => {
     if (!rowId) return;
     openEventSheetByRowId(rowId);
   });
-  if (el.loadHistoryBtn) {
-    el.loadHistoryBtn.addEventListener("click", loadHistoryRecords);
-  }
   if (el.historyToggleBtn) {
     el.historyToggleBtn.addEventListener("click", () => {
       toggleHistoryPanel().catch((err) => {
-        setHint(el.historyStatus, `讀取失敗：${err.message}`);
+        setHint(el.sessionStatus, `讀取失敗：${err.message}`);
       });
     });
   }
   if (el.historyList) {
+    document.addEventListener("click", (event) => {
+      if (!event.target.closest(".history-session-actions")) {
+        document.querySelectorAll(".history-export-menu").forEach((m) => m.classList.add("hidden"));
+      }
+    });
     el.historyList.addEventListener("click", (event) => {
+      const exportBtn = event.target.closest(".history-export-toggle");
+      if (exportBtn) {
+        const actions = exportBtn.closest(".history-session-actions");
+        const menu = actions?.querySelector(".history-export-menu");
+        if (!menu) return;
+        const willOpen = menu.classList.contains("hidden");
+        document.querySelectorAll(".history-export-menu").forEach((m) => m.classList.add("hidden"));
+        menu.classList.toggle("hidden", !willOpen);
+        return;
+      }
+      const exportItem = event.target.closest(".history-export-item");
+      if (exportItem) {
+        const sessionId = Number(exportItem.dataset.sessionId || "");
+        const fmt = String(exportItem.dataset.format || "").toLowerCase();
+        if (!Number.isFinite(sessionId) || !["txt", "csv"].includes(fmt)) return;
+        document.querySelectorAll(".history-export-menu").forEach((m) => m.classList.add("hidden"));
+        exportHistorySession(sessionId, fmt);
+        return;
+      }
       const btn = event.target.closest(".history-delete-btn");
       if (!btn) return;
       const sessionId = Number(btn.dataset.sessionId || "");
@@ -2971,18 +3574,26 @@ const bind = () => {
   }
   if (el.historyDateList) {
     el.historyDateList.addEventListener("change", () => {
-      if (!el.historyDateList.value) return;
-      el.historyDate.value = el.historyDateList.value;
       updateHistoryDateAvailabilityUI();
       loadHistoryRecords();
     });
   }
-  if (el.historyDate) {
-    el.historyDate.addEventListener("change", () => {
-      if (el.historyDateList) {
-        el.historyDateList.value = el.historyDate.value;
-      }
+  if (el.historyImportBtn) {
+    el.historyImportBtn.addEventListener("click", onHistoryImportClick);
+  }
+  if (el.historyImportFile) {
+    el.historyImportFile.addEventListener("change", () => {
+      onHistoryImportFileChange().catch((err) => {
+        setHint(el.sessionStatus, `匯入失敗：${String(err?.message || err || "")}`);
+      });
+    });
+  }
+  if (el.historyGranularity) {
+    el.historyGranularity.addEventListener("change", () => {
+      state.historyGranularity = el.historyGranularity.value === "month" ? "month" : "day";
+      renderHistoryDateList();
       updateHistoryDateAvailabilityUI();
+      loadHistoryRecords();
     });
   }
 };
@@ -3148,9 +3759,10 @@ const init = async () => {
     refreshLiveTimelineClock({ force: true });
   });
   bind();
-  if (el.historyDate) {
-    el.historyDate.value = toDateInput();
+  if (el.historyGranularity) {
+    el.historyGranularity.value = "day";
   }
+  state.historyGranularity = "day";
   if (el.historyPanel) {
     el.historyPanel.classList.add("hidden");
   }
