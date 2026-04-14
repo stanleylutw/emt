@@ -35,6 +35,7 @@ const state = {
   timelineEditMode: false,
   profileLoadPromise: null,
   refreshPromise: null,
+  summaryPromise: null,
   liveUiTimer: null,
   liveUiLastMinute: null,
   pendingQueueCache: [],
@@ -1631,63 +1632,94 @@ const renderSummary = async () => {
   }
 
   // 今日優先用本地資料即時計算，避免畫面短暫顯示 00:00 或遠端延遲造成不一致。
+  // 這段即使有遠端摘要查詢進行中，也要立即更新畫面。
   if (state.summaryRange === "today" && state.session) {
     const localSummary = summarizeSessionRows(state.session, state.rows || []);
     setSummaryValues(localSummary);
     return;
   }
 
-  const bounds = rangeBoundsByType(state.summaryRange);
-  let query = supabaseClient
-    .from("duty_sessions")
-    .select("id, end_time, status, start_time")
-    .eq("user_id", state.user.id)
-    .order("start_time", { ascending: false });
-
-  if (bounds) {
-    query = query.gte("start_time", bounds.startIso).lt("start_time", bounds.endIso);
+  if (state.summaryPromise) {
+    addDebugLog("summary.join", { range: state.summaryRange });
+    return state.summaryPromise;
   }
 
-  const { data: sessions, error: sesErr } = await dbQuery((signal) => query.abortSignal(signal), {
-    label: "讀取摘要主單",
-    attempts: 2
-  });
-  if (sesErr) {
-    setHint(el.sessionStatus, `摘要讀取失敗：${sesErr.message}`);
-    return;
-  }
-  if (!sessions || !sessions.length) {
-    setSummaryValues({});
-    return;
-  }
+  const summaryUserId = state.user?.id || null;
+  const summaryRange = state.summaryRange;
+  const runner = async () => {
+    const bounds = rangeBoundsByType(summaryRange);
+    let query = supabaseClient
+      .from("duty_sessions")
+      .select("id, end_time, status, start_time")
+      .eq("user_id", summaryUserId)
+      .order("start_time", { ascending: false });
 
-  const ids = sessions.map((s) => s.id);
-  const { data: rows, error: rowErr } = await dbQuery(
-    (signal) =>
-      supabaseClient
-        .from("duty_dispatches")
-        .select("session_id, dispatch_time, patient_count, patient_count_custom, note")
-        .in("session_id", ids)
-        .abortSignal(signal),
-    { label: "讀取摘要明細", attempts: 2 }
-  );
-  if (rowErr) {
-    setHint(el.sessionStatus, `摘要讀取失敗：${rowErr.message}`);
-    return;
+    if (bounds) {
+      query = query.gte("start_time", bounds.startIso).lt("start_time", bounds.endIso);
+    }
+
+    const { data: sessions, error: sesErr } = await dbQuery((signal) => query.abortSignal(signal), {
+      label: "讀取摘要主單",
+      attempts: 2
+    });
+    if (sesErr) {
+      if (state.user?.id === summaryUserId && state.summaryRange === summaryRange) {
+        setHint(el.sessionStatus, `摘要讀取失敗：${sesErr.message}`);
+      }
+      return;
+    }
+    if (!sessions || !sessions.length) {
+      if (state.user?.id === summaryUserId && state.summaryRange === summaryRange) {
+        setSummaryValues({});
+      }
+      return;
+    }
+
+    const ids = sessions.map((s) => s.id);
+    const { data: rows, error: rowErr } = await dbQuery(
+      (signal) =>
+        supabaseClient
+          .from("duty_dispatches")
+          .select("session_id, dispatch_time, patient_count, patient_count_custom, note")
+          .in("session_id", ids)
+          .abortSignal(signal),
+      { label: "讀取摘要明細", attempts: 2 }
+    );
+    if (rowErr) {
+      if (state.user?.id === summaryUserId && state.summaryRange === summaryRange) {
+        setHint(el.sessionStatus, `摘要讀取失敗：${rowErr.message}`);
+      }
+      return;
+    }
+
+    const map = buildSessionRowsMap(rows || []);
+    let dutyMs = 0;
+    let eventCount = 0;
+    let transported = 0;
+    sessions.forEach((s) => {
+      const part = summarizeSessionRows(s, map.get(s.id) || []);
+      dutyMs += part.dutyMs;
+      eventCount += part.eventCount;
+      transported += part.transported;
+    });
+
+    // 若查詢完成時使用者或區間已切換，丟棄舊結果避免覆蓋新畫面。
+    if (state.user?.id !== summaryUserId || state.summaryRange !== summaryRange) {
+      addDebugLog("summary.stale.discard", { summaryRange });
+      return;
+    }
+    setSummaryValues({ dutyMs, eventCount, transported });
+  };
+
+  const task = runner();
+  state.summaryPromise = task;
+  try {
+    return await task;
+  } finally {
+    if (state.summaryPromise === task) {
+      state.summaryPromise = null;
+    }
   }
-
-  const map = buildSessionRowsMap(rows || []);
-  let dutyMs = 0;
-  let eventCount = 0;
-  let transported = 0;
-  sessions.forEach((s) => {
-    const part = summarizeSessionRows(s, map.get(s.id) || []);
-    dutyMs += part.dutyMs;
-    eventCount += part.eventCount;
-    transported += part.transported;
-  });
-
-  setSummaryValues({ dutyMs, eventCount, transported });
 };
 
 const switchSummaryRange = async (nextRange) => {
