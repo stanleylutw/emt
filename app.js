@@ -1,7 +1,7 @@
 const SUPABASE_URL = "https://iysshfoqqzdwkfeqnsda.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_9Tts206qgN5G3toPwcYv2g_V1Ct-W44";
 const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
-const APP_VERSION = "1.4";
+const APP_VERSION = "1.6";
 
 const state = {
   user: null,
