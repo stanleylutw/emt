@@ -103,6 +103,9 @@ const el = {
   hospital: document.getElementById("hospital"),
   patientCount: document.getElementById("patientCount"),
   caseType: document.getElementById("caseType"),
+  gender: document.getElementById("gender"),
+  ageGroup: document.getElementById("ageGroup"),
+  glucose: document.getElementById("glucose"),
   chiefComplaint: document.getElementById("chiefComplaint"),
   bp: document.getElementById("bp"),
   spo2: document.getElementById("spo2"),
@@ -1146,7 +1149,18 @@ const applyProfileToUI = () => {
 };
 
 const parseNote = (note) => {
-  if (!note) return { segment: "event", transported: false, memo: "", open: false, pulse: "" };
+  if (!note) {
+    return {
+      segment: "event",
+      transported: false,
+      memo: "",
+      open: false,
+      pulse: "",
+      gender: "不明",
+      ageGroup: "不明",
+      glucose: ""
+    };
+  }
   try {
     const parsed = JSON.parse(note);
     return {
@@ -1154,10 +1168,22 @@ const parseNote = (note) => {
       transported: Boolean(parsed.transported),
       memo: parsed.memo || "",
       open: Boolean(parsed.open),
-      pulse: String(parsed.pulse || "")
+      pulse: String(parsed.pulse || ""),
+      gender: parsed.gender || "不明",
+      ageGroup: parsed.ageGroup || "不明",
+      glucose: String(parsed.glucose || "")
     };
   } catch {
-    return { segment: "event", transported: false, memo: note, open: false, pulse: "" };
+    return {
+      segment: "event",
+      transported: false,
+      memo: note,
+      open: false,
+      pulse: "",
+      gender: "不明",
+      ageGroup: "不明",
+      glucose: ""
+    };
   }
 };
 
@@ -1679,11 +1705,12 @@ const rowSummary = (row) => {
   }
   const hospital = row.hospital === "其他" ? row.hospital_custom : row.hospital;
   const count = row.patient_count === "其他" ? row.patient_count_custom : row.patient_count;
+  const caseText = displayCaseType(row) || "其他";
   const note = parseNote(row.note);
   const memo = note.memo ? `，${note.memo}` : "";
   const complaint = (row.chief_complaint || "").trim();
   const complaintText = complaint ? `，${complaint}` : "";
-  return `${hospital || "未填"} ${count || "?"}人${complaintText}${memo}`;
+  return `${hospital || "未填"} ${count || "?"}人 ${caseText}${complaintText}${memo}`;
 };
 
 const displayHospital = (row) => (row.hospital === "其他" ? row.hospital_custom : row.hospital) || "";
@@ -1728,6 +1755,9 @@ const buildSessionExportRows = (session, rows) => {
       bp: row.bp || "",
       spo2: row.spo2 || "",
       pulse: note.pulse || "",
+      gender: note.gender || "不明",
+      age_group: note.ageGroup || "不明",
+      glucose: note.glucose || "",
       equipment_used_json: JSON.stringify(Array.isArray(row.equipment_used) ? row.equipment_used : []),
       note_json: row.note || ""
     };
@@ -1941,6 +1971,9 @@ const normalizeImportedRows = (rawRows) => {
       bp: r.bp || null,
       spo2: r.spo2 || null,
       pulse: r.pulse || "",
+      gender: r.gender || "不明",
+      age_group: r.age_group || "不明",
+      glucose: r.glucose || "",
       equipment_used_json: r.equipment_used_json || "[]",
       note_json: r.note_json || ""
     }))
@@ -1992,7 +2025,10 @@ const importHistoryRows = async (rows) => {
         segment: row.segment || "event",
         memo: row.memo || "",
         open: Boolean(row.is_open),
-        pulse: row.pulse || ""
+        pulse: row.pulse || "",
+        gender: row.gender || "不明",
+        ageGroup: row.age_group || "不明",
+        glucose: row.glucose || ""
       });
     }
     const dispatchPayload = {
@@ -2448,6 +2484,15 @@ const fillEventForm = (row) => {
   if (el.pulse) {
     el.pulse.value = note.pulse || "";
   }
+  if (el.gender) {
+    el.gender.value = note.gender || "不明";
+  }
+  if (el.ageGroup) {
+    el.ageGroup.value = note.ageGroup || "不明";
+  }
+  if (el.glucose) {
+    el.glucose.value = note.glucose || "";
+  }
   setEquipmentSelections(row.equipment_used || []);
   el.memo.value = note.memo || "";
   syncPatientCountByHospital();
@@ -2510,7 +2555,10 @@ const buildEventUpdatePayload = (open) => {
       segment: "event",
       memo: el.memo.value.trim(),
       open,
-      pulse: el.pulse ? el.pulse.value.trim() : ""
+      pulse: el.pulse ? el.pulse.value.trim() : "",
+      gender: el.gender ? el.gender.value : "不明",
+      ageGroup: el.ageGroup ? el.ageGroup.value : "不明",
+      glucose: el.glucose ? el.glucose.value.trim() : ""
     })
   };
 };
@@ -2525,7 +2573,19 @@ const resolveStandbyInsertIso = (eventRow, finishDate) => {
   return new Date(eventStartMs + 1000).toISOString();
 };
 
-const DETAIL_FIELD_KEYS = ["hospital", "patientCount", "caseType", "chiefComplaint", "bp", "spo2", "pulse", "memo"];
+const DETAIL_FIELD_KEYS = [
+  "hospital",
+  "patientCount",
+  "caseType",
+  "gender",
+  "ageGroup",
+  "glucose",
+  "chiefComplaint",
+  "bp",
+  "spo2",
+  "pulse",
+  "memo"
+];
 
 const setEventDetailDisabled = (disabled) => {
   DETAIL_FIELD_KEYS.forEach((k) => {
@@ -2913,6 +2973,9 @@ const closeEventSheet = (force = false) => {
     el.patientCount.disabled = false;
   }
   if (el.caseType) el.caseType.value = "外科";
+  if (el.gender) el.gender.value = "不明";
+  if (el.ageGroup) el.ageGroup.value = "不明";
+  if (el.glucose) el.glucose.value = "";
   if (el.eventStartTime) {
     el.eventStartTime.value = "";
     el.eventStartTime.disabled = false;
@@ -3376,6 +3439,17 @@ const normalizeBpInput = (value) => {
 
 const normalizeDigitsOnly = (value, max = 3) => String(value || "").replace(/\D/g, "").slice(0, max);
 
+const normalizeDateTimeInput = (value) => {
+  const digits = String(value || "").replace(/\D/g, "").slice(0, 12);
+  if (!digits) return "";
+  let out = digits.slice(0, 4);
+  if (digits.length > 4) out += `-${digits.slice(4, 6)}`;
+  if (digits.length > 6) out += `-${digits.slice(6, 8)}`;
+  if (digits.length > 8) out += ` ${digits.slice(8, 10)}`;
+  if (digits.length > 10) out += `:${digits.slice(10, 12)}`;
+  return out;
+};
+
 const bind = () => {
   if (el.startTime) el.startTime.value = toInput24h();
   if (el.fillStartNowBtn && el.startTime) {
@@ -3391,6 +3465,22 @@ const bind = () => {
   if (el.fillEventNowBtn && el.eventFinishTime) {
     el.fillEventNowBtn.addEventListener("click", () => {
       el.eventFinishTime.value = toInput24h();
+    });
+  }
+  if (el.eventStartTime) {
+    el.eventStartTime.addEventListener("input", () => {
+      const normalized = normalizeDateTimeInput(el.eventStartTime.value);
+      if (normalized !== el.eventStartTime.value) {
+        el.eventStartTime.value = normalized;
+      }
+    });
+  }
+  if (el.eventFinishTime) {
+    el.eventFinishTime.addEventListener("input", () => {
+      const normalized = normalizeDateTimeInput(el.eventFinishTime.value);
+      if (normalized !== el.eventFinishTime.value) {
+        el.eventFinishTime.value = normalized;
+      }
     });
   }
 
@@ -3439,6 +3529,25 @@ const bind = () => {
       const normalized = normalizeDigitsOnly(el.spo2.value, 3);
       if (normalized !== el.spo2.value) {
         el.spo2.value = normalized;
+      }
+    });
+  }
+  if (el.glucose) {
+    el.glucose.addEventListener("focus", () => {
+      window.setTimeout(() => {
+        el.glucose.select();
+      }, 0);
+    });
+    el.glucose.addEventListener("input", () => {
+      const normalized = normalizeDigitsOnly(el.glucose.value, 4);
+      if (normalized !== el.glucose.value) {
+        el.glucose.value = normalized;
+      }
+    });
+    el.glucose.addEventListener("blur", () => {
+      const normalized = normalizeDigitsOnly(el.glucose.value, 4);
+      if (normalized !== el.glucose.value) {
+        el.glucose.value = normalized;
       }
     });
   }

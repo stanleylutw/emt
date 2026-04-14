@@ -126,20 +126,22 @@
       <div class="sheet-body">
         <h2 id="eventSheetTitle">結束出勤</h2>
         <form id="eventForm" class="form">
-          <label>
-            開始時間
-            <div class="inline time-inline">
-              <input id="eventStartTime" type="text" inputmode="numeric" placeholder="YYYY-MM-DD HH:mm" required />
-              <button id="fillEventStartNowBtn" class="small" type="button">現在</button>
-            </div>
-          </label>
-          <label>
-            結束時間
-            <div class="inline time-inline">
-              <input id="eventFinishTime" type="text" inputmode="numeric" placeholder="YYYY-MM-DD HH:mm" required />
-              <button id="fillEventNowBtn" class="small" type="button">現在</button>
-            </div>
-          </label>
+          <div class="time-row">
+            <label>
+              開始時間
+              <div class="inline time-inline">
+                <input id="eventStartTime" type="text" inputmode="numeric" placeholder="YYYY-MM-DD HH:mm" required />
+                <button id="fillEventStartNowBtn" class="small" type="button">現在</button>
+              </div>
+            </label>
+            <label>
+              結束時間
+              <div class="inline time-inline">
+                <input id="eventFinishTime" type="text" inputmode="numeric" placeholder="YYYY-MM-DD HH:mm" required />
+                <button id="fillEventNowBtn" class="small" type="button">現在</button>
+              </div>
+            </label>
+          </div>
           <div id="eventDetailsBlock">
             <div class="tri-row">
             <label>
@@ -187,6 +189,31 @@
               脈搏
               <input id="pulse" type="text" inputmode="numeric" pattern="[0-9]*" />
             </label>
+            </div>
+            <div class="tri-row">
+              <label>
+                性別
+                <select id="gender">
+                  <option value="不明" selected>不明</option>
+                  <option value="男">男</option>
+                  <option value="女">女</option>
+                </select>
+              </label>
+              <label>
+                年齡
+                <select id="ageGroup">
+                  <option value="不明" selected>不明</option>
+                  <option value="兒童">兒童</option>
+                  <option value="少年">少年</option>
+                  <option value="青年">青年</option>
+                  <option value="壯年">壯年</option>
+                  <option value="高齡">高齡</option>
+                </select>
+              </label>
+              <label>
+                血糖
+                <input id="glucose" type="text" inputmode="numeric" pattern="[0-9]*" />
+              </label>
             </div>
             <label>
               主訴

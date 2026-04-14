@@ -1077,18 +1077,24 @@ button[aria-disabled="true"] {
   z-index: 1;
 }
 
+#eventSheet .time-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
 #eventSheet .time-inline {
-  grid-template-columns: minmax(170px, 235px) auto;
-  justify-content: start;
+  grid-template-columns: minmax(0, 1fr) auto;
+  justify-content: stretch;
 }
 
 #eventSheet .time-inline input[type="text"] {
   width: 100%;
-  max-width: 235px;
+  max-width: none;
 }
 
 #eventSheet .form.edit-mode .time-inline {
-  grid-template-columns: minmax(170px, 235px);
+  grid-template-columns: minmax(0, 1fr);
 }
 
 #eventSheet .form.edit-mode .time-inline .small {
