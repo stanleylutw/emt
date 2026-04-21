@@ -1735,7 +1735,7 @@ const rowSummary = (row) => {
     const prefix = (note.memo || "").trim();
     return prefix ? `${prefix} / 待勤` : "待勤";
   }
-  const hospital = row.hospital === "其他" ? row.hospital_custom : row.hospital;
+  const hospital = row.hospital === "其他" ? row.hospital_custom || "其他" : row.hospital;
   const count = row.patient_count === "其他" ? row.patient_count_custom : row.patient_count;
   const caseText = displayCaseType(row) || "其他";
   const note = parseNote(row.note);
@@ -1745,7 +1745,8 @@ const rowSummary = (row) => {
   return `${hospital || "未填"} ${count || "?"}人 ${caseText}${complaintText}${memo}`;
 };
 
-const displayHospital = (row) => (row.hospital === "其他" ? row.hospital_custom : row.hospital) || "";
+const displayHospital = (row) =>
+  (row.hospital === "其他" ? row.hospital_custom || "其他" : row.hospital) || "";
 const displayPatientCount = (row) => (row.patient_count === "其他" ? row.patient_count_custom : row.patient_count) || "";
 const displayCaseType = (row) => (row.case_type === "其他" ? row.case_type_custom : row.case_type) || "";
 
@@ -2127,7 +2128,7 @@ const rowTimelineLine2 = (row) => {
   if (isStandby(row)) {
     return "待勤";
   }
-  const hospital = row.hospital === "其他" ? row.hospital_custom : row.hospital;
+  const hospital = row.hospital === "其他" ? row.hospital_custom || "其他" : row.hospital;
   const count = row.patient_count === "其他" ? row.patient_count_custom : row.patient_count;
   const caseType = row.case_type === "其他" ? row.case_type_custom : row.case_type;
   const complaint = (row.chief_complaint || "").trim() || "-";
@@ -2467,10 +2468,13 @@ const parseHospitalForForm = (row) => {
   if (row.hospital === "其他" && row.hospital_custom === "未送") {
     return "未送";
   }
-  if (row.hospital === "其他" && (!row.hospital_custom || row.hospital_custom === "未填")) {
+  if (row.hospital === "其他" && row.hospital_custom === "未選") {
     return "未選";
   }
-  const allowed = ["未選", "雙和", "永和耕莘", "慈濟", "新店耕莘", "板醫", "西園", "台大", "未送"];
+  if (row.hospital === "其他" && (!row.hospital_custom || row.hospital_custom === "未填")) {
+    return "其他";
+  }
+  const allowed = ["未選", "雙和", "永和耕莘", "慈濟", "新店耕莘", "板醫", "西園", "台大", "安康耕莘", "其他", "未送"];
   if (allowed.includes(row.hospital)) {
     return row.hospital;
   }
