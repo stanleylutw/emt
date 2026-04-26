@@ -964,6 +964,58 @@ button[aria-disabled="true"] {
   margin: 2px 0 8px;
 }
 
+#eventSheet .event-sheet-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+#eventSheet .event-sheet-head h2 {
+  margin: 2px 0 8px;
+}
+
+#eventSheet .event-guide-toggle {
+  width: 36px;
+  height: 36px;
+  min-width: 36px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#eventSheet .event-guide-toggle svg {
+  width: 20px;
+  height: 20px;
+}
+
+#eventSheet .event-critical-guide {
+  border: 1px solid #d9e7ef;
+  border-radius: 12px;
+  background: #f8fbfe;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+}
+
+#eventSheet .event-critical-guide h3 {
+  margin: 0 0 6px;
+  font-size: 16px;
+}
+
+#eventSheet .event-critical-guide h4 {
+  margin: 8px 0 4px;
+  font-size: 14px;
+  color: #2a4557;
+}
+
+#eventSheet .event-critical-guide p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.45;
+  color: #3b5668;
+}
+
 #eventSheet .form {
   gap: 8px;
 }

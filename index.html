@@ -124,7 +124,80 @@
 
     <section id="eventSheet" class="sheet hidden">
       <div class="sheet-body">
-        <h2 id="eventSheetTitle">結束出勤</h2>
+        <div class="event-sheet-head">
+          <h2 id="eventSheetTitle">結束出勤</h2>
+          <button
+            id="eventGuideToggleBtn"
+            type="button"
+            class="icon-btn ghost-icon event-guide-toggle hidden"
+            aria-label="顯示危急度判斷"
+            aria-expanded="false"
+          >
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M5 4.5A2.5 2.5 0 0 1 7.5 2H20v16H7.5A2.5 2.5 0 0 0 5 20.5V4.5Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"></path>
+              <path d="M5 4.5A2.5 2.5 0 0 0 2.5 2H2v16h.5A2.5 2.5 0 0 1 5 20.5" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"></path>
+              <path d="M8.5 6.2H16.8M8.5 9.5H16.8M8.5 12.8H14.2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"></path>
+            </svg>
+          </button>
+        </div>
+        <section id="eventCriticalGuide" class="event-critical-guide hidden" aria-live="polite">
+          <h3>危急度判斷</h3>
+          <div class="guide-section">
+            <h4>一. 生命徵象：</h4>
+            <p>
+              1. 急性意識不清 (GCS小於14)<br />
+              2. 呼吸每分鐘大於30次或小於10次<br />
+              3. 脈搏每分鐘大於150次或小於50次<br />
+              4. 收縮壓大於220毫米汞柱 (mmHg) 或小於90毫米汞柱<br />
+              5. 微血管充填時間大於2秒<br />
+              6. 體溫大於攝氏41度 (℃) 或小於攝氏32度 (℃)<br />
+              7. 血氧濃度 (SpO2) 小於百分之90 (%)
+            </p>
+          </div>
+          <div class="guide-section">
+            <h4>二. 創傷部位：</h4>
+            <p>
+              1. 表體面積大於百分之25 (%)<br />
+              2. 顏面或會陰之二度或三度灼燙傷<br />
+              3. 重大電(雷)擊傷<br />
+              4. 化學性或吸入性灼燙傷<br />
+              5. 頭頸軀幹及肘膝處以上肢體之穿刺傷<br />
+              6. 大量皮下氣腫<br />
+              7. 氣管支氣管損傷<br />
+              8. 內臟外露<br />
+              9. 手腕或腳踝以上之截肢<br />
+              10. 兩處以上大腿及上臂處長骨骨折<br />
+              11. 骨盆腔骨折<br />
+              12. 頭骨開放或凹陷性骨折<br />
+              13. 肢體脈搏摸不到<br />
+              14. 癱瘓<br />
+              15. 壓碎傷或嚴重撕裂傷
+            </p>
+          </div>
+          <div class="guide-section">
+            <h4>三. 外傷機轉：</h4>
+            <p>
+              1. 大於6公尺或大於兩層樓高之高處墜落 (小兒大於3公尺或大於2倍身高高度)<br />
+              2. 脫困時間大於20分鐘<br />
+              3. 除遠端肢體外之身體被車輛輾過<br />
+              4. 從車輛中被拋出<br />
+              5. 同車有死亡者或其他有高能量撞擊可能
+            </p>
+          </div>
+          <div class="guide-section">
+            <h4>四. 特殊情況：</h4>
+            <p>
+              1. 血糖值小於每分升60毫克 (mg/dl) 或顯示「高(high)」<br />
+              2. 疑似急性腦中風或缺血性胸痛發作<br />
+              3. 持續抽搐<br />
+              4. 中毒可能危及生命<br />
+              5. 小兒評估危急 (評估三角異常)者<br />
+              6. 急產 或已在現場完成接生者<br />
+              7. 毒蛇咬傷<br />
+              8. 溺水
+            </p>
+          </div>
+        </section>
         <form id="eventForm" class="form">
           <div class="time-row">
             <label>

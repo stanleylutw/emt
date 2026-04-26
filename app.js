@@ -93,6 +93,8 @@ const el = {
 
   eventSheet: document.getElementById("eventSheet"),
   eventSheetTitle: document.getElementById("eventSheetTitle"),
+  eventGuideToggleBtn: document.getElementById("eventGuideToggleBtn"),
+  eventCriticalGuide: document.getElementById("eventCriticalGuide"),
   eventForm: document.getElementById("eventForm"),
   saveDraftBtn: document.getElementById("saveDraftBtn"),
   confirmFinishBtn: document.getElementById("confirmFinishBtn"),
@@ -2535,6 +2537,16 @@ const fillEventForm = (row) => {
   updateVitalAlertState();
 };
 
+const setEventGuideOpen = (open) => {
+  const isOpen = Boolean(open);
+  if (el.eventCriticalGuide) {
+    el.eventCriticalGuide.classList.toggle("hidden", !isOpen);
+  }
+  if (el.eventGuideToggleBtn) {
+    el.eventGuideToggleBtn.setAttribute("aria-expanded", isOpen ? "true" : "false");
+  }
+};
+
 const setEventSheetMode = (mode) => {
   state.eventSheetMode = mode;
   if (el.eventForm) {
@@ -2550,12 +2562,15 @@ const setEventSheetMode = (mode) => {
     if (el.fillEventStartNowBtn) el.fillEventStartNowBtn.disabled = true;
     if (el.fillEventNowBtn) el.fillEventNowBtn.disabled = false;
     setEventDetailDisabled(false);
+    if (el.eventGuideToggleBtn) el.eventGuideToggleBtn.classList.add("hidden");
+    setEventGuideOpen(false);
     return;
   }
 
   el.eventSheetTitle.textContent = "編輯紀錄";
   el.saveDraftBtn.classList.remove("hidden");
   el.confirmFinishBtn.classList.add("hidden");
+  if (el.eventGuideToggleBtn) el.eventGuideToggleBtn.classList.remove("hidden");
   if (el.eventStartTime) el.eventStartTime.disabled = false;
   el.eventFinishTime.disabled = false;
   if (el.fillEventStartNowBtn) el.fillEventStartNowBtn.disabled = false;
@@ -3024,6 +3039,8 @@ const closeEventSheet = (force = false) => {
   el.saveDraftBtn.classList.add("hidden");
   el.confirmFinishBtn.classList.remove("hidden");
   updateVitalAlertState();
+  if (el.eventGuideToggleBtn) el.eventGuideToggleBtn.classList.add("hidden");
+  setEventGuideOpen(false);
   el.eventSheet.classList.add("hidden");
 };
 
@@ -3489,7 +3506,9 @@ const normalizeDateTimeInput = (value) => {
 };
 
 const parseIntOrNull = (value) => {
-  const n = Number(String(value || "").trim());
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+  const n = Number(raw);
   if (!Number.isFinite(n)) return null;
   return Math.floor(n);
 };
@@ -3647,6 +3666,12 @@ const bind = () => {
         el.pulse.value = normalized;
       }
       updateVitalAlertState();
+    });
+  }
+  if (el.eventGuideToggleBtn) {
+    el.eventGuideToggleBtn.addEventListener("click", () => {
+      const isOpen = el.eventGuideToggleBtn.getAttribute("aria-expanded") === "true";
+      setEventGuideOpen(!isOpen);
     });
   }
 
