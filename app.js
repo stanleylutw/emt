@@ -2,6 +2,7 @@ const SUPABASE_URL = "https://iysshfoqqzdwkfeqnsda.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_9Tts206qgN5G3toPwcYv2g_V1Ct-W44";
 const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
 const APP_VERSION = "1.6";
+const APP_RELEASE_STAMP = "2604141158";
 
 const state = {
   user: null,
@@ -312,6 +313,17 @@ const toBuildStamp = (date = new Date()) => {
   return `${yy}${mm}${dd}${hh}${min}`;
 };
 
+const resolveBuildStamp = () => {
+  const lastModifiedRaw = String(document.lastModified || "").trim();
+  if (lastModifiedRaw) {
+    const parsed = new Date(lastModifiedRaw);
+    if (!Number.isNaN(parsed.getTime())) {
+      return toBuildStamp(parsed);
+    }
+  }
+  return APP_RELEASE_STAMP;
+};
+
 const toInput24h = (date = new Date()) => {
   const y = date.getFullYear();
   const m = pad2(date.getMonth() + 1);
@@ -542,7 +554,7 @@ const applyFooterVersion = () => {
     el.appVersionText.textContent = APP_VERSION;
   }
   if (el.appBuildTimeText) {
-    el.appBuildTimeText.textContent = toBuildStamp(new Date());
+    el.appBuildTimeText.textContent = resolveBuildStamp();
   }
 };
 
