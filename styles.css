@@ -1016,6 +1016,11 @@ button[aria-disabled="true"] {
   width: 100%;
 }
 
+#eventSheet input.input-alert {
+  background: #fdeff0;
+  border-color: #efb6bd;
+}
+
 #eventSheet .equipment-collapsible {
   border: 1px solid #cde0ea;
   border-radius: 12px;

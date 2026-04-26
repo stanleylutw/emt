@@ -2532,6 +2532,7 @@ const fillEventForm = (row) => {
   setEquipmentSelections(row.equipment_used || []);
   el.memo.value = note.memo || "";
   syncPatientCountByHospital();
+  updateVitalAlertState();
 };
 
 const setEventSheetMode = (mode) => {
@@ -3022,6 +3023,7 @@ const closeEventSheet = (force = false) => {
   setEventDetailDisabled(false);
   el.saveDraftBtn.classList.add("hidden");
   el.confirmFinishBtn.classList.remove("hidden");
+  updateVitalAlertState();
   el.eventSheet.classList.add("hidden");
 };
 
@@ -3486,6 +3488,39 @@ const normalizeDateTimeInput = (value) => {
   return out;
 };
 
+const parseIntOrNull = (value) => {
+  const n = Number(String(value || "").trim());
+  if (!Number.isFinite(n)) return null;
+  return Math.floor(n);
+};
+
+const parseSystolicFromBp = (value) => {
+  const left = String(value || "")
+    .split("/")[0]
+    .replace(/\D/g, "");
+  if (!left) return null;
+  return parseIntOrNull(left);
+};
+
+const setInputAlertState = (node, alertOn) => {
+  if (!node) return;
+  const on = Boolean(alertOn);
+  node.classList.toggle("input-alert", on);
+  node.setAttribute("aria-invalid", on ? "true" : "false");
+};
+
+const updateVitalAlertState = () => {
+  const systolic = parseSystolicFromBp(el.bp?.value || "");
+  const spo2 = parseIntOrNull(el.spo2?.value || "");
+  const pulse = parseIntOrNull(el.pulse?.value || "");
+  const glucose = parseIntOrNull(el.glucose?.value || "");
+
+  setInputAlertState(el.bp, Number.isFinite(systolic) && (systolic < 90 || systolic > 220));
+  setInputAlertState(el.pulse, Number.isFinite(pulse) && (pulse < 50 || pulse > 150));
+  setInputAlertState(el.spo2, Number.isFinite(spo2) && spo2 < 90);
+  setInputAlertState(el.glucose, Number.isFinite(glucose) && (glucose < 60 || glucose > 500));
+};
+
 const bind = () => {
   if (el.startTime) el.startTime.value = toInput24h();
   if (el.fillStartNowBtn && el.startTime) {
@@ -3541,12 +3576,14 @@ const bind = () => {
       if (normalized !== el.bp.value) {
         el.bp.value = normalized;
       }
+      updateVitalAlertState();
     });
     el.bp.addEventListener("blur", () => {
       const normalized = normalizeBpInput(el.bp.value);
       if (normalized !== el.bp.value) {
         el.bp.value = normalized;
       }
+      updateVitalAlertState();
     });
   }
   if (el.spo2) {
@@ -3560,12 +3597,14 @@ const bind = () => {
       if (normalized !== el.spo2.value) {
         el.spo2.value = normalized;
       }
+      updateVitalAlertState();
     });
     el.spo2.addEventListener("blur", () => {
       const normalized = normalizeDigitsOnly(el.spo2.value, 3);
       if (normalized !== el.spo2.value) {
         el.spo2.value = normalized;
       }
+      updateVitalAlertState();
     });
   }
   if (el.glucose) {
@@ -3579,12 +3618,14 @@ const bind = () => {
       if (normalized !== el.glucose.value) {
         el.glucose.value = normalized;
       }
+      updateVitalAlertState();
     });
     el.glucose.addEventListener("blur", () => {
       const normalized = normalizeDigitsOnly(el.glucose.value, 4);
       if (normalized !== el.glucose.value) {
         el.glucose.value = normalized;
       }
+      updateVitalAlertState();
     });
   }
   if (el.pulse) {
@@ -3598,12 +3639,14 @@ const bind = () => {
       if (normalized !== el.pulse.value) {
         el.pulse.value = normalized;
       }
+      updateVitalAlertState();
     });
     el.pulse.addEventListener("blur", () => {
       const normalized = normalizeDigitsOnly(el.pulse.value, 3);
       if (normalized !== el.pulse.value) {
         el.pulse.value = normalized;
       }
+      updateVitalAlertState();
     });
   }
 
