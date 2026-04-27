@@ -3152,12 +3152,6 @@ const saveEventDraft = async () => {
         setHint(el.eventStatus, "開始時間過早，會影響前一筆以上紀錄（不合法）。");
         return;
       }
-    } else if (state.session.start_time) {
-      const sessionStartMs = new Date(state.session.start_time).getTime();
-      if (Number.isFinite(sessionStartMs) && startMs < sessionStartMs) {
-        setHint(el.eventStatus, "開始時間不可早於勤務開始時間。");
-        return;
-      }
     }
 
     if (nextRow) {
@@ -3203,6 +3197,13 @@ const saveEventDraft = async () => {
       enqueuePendingItem({ type: "dispatch_update", rowId: row.id, payload });
     }
     upsertLocalRowFromPayload(row.id, { ...row, ...payload });
+  }
+
+  // 第一筆開始時間允許往前/往後調整，需同步更新勤務主單開始時間。
+  if (changedTime && startChanged && !prevRow) {
+    const sessionStartPayload = { start_time: new Date(startMs).toISOString() };
+    enqueuePendingItem({ type: "session_update", sessionId: state.session.id, payload: sessionStartPayload });
+    state.session = { ...state.session, ...sessionStartPayload };
   }
 
   if (changedTime && nextRow) {
