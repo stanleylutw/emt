@@ -2875,6 +2875,11 @@ const refreshLiveTimelineClock = ({ force = false } = {}) => {
   }
 };
 
+const isSessionReadTimeoutError = (err) => {
+  const msg = String(err?.message || "");
+  return msg.includes("讀取勤務主單") && msg.includes("逾時");
+};
+
 const refresh = async (opts = {}) => {
   if (state.refreshPromise) {
     addDebugLog("refresh.join");
@@ -2909,6 +2914,26 @@ const refresh = async (opts = {}) => {
     }
     addDebugLog("refresh.success", { elapsedMs: Math.round(performance.now() - rfStart) });
   } catch (err) {
+    if (isSessionReadTimeoutError(err)) {
+      // 容錯：勤務主單逾時時保留目前畫面與快取資料，避免整頁變成錯誤狀態。
+      addDebugLog(
+        "refresh.fallback.keep_state",
+        {
+          elapsedMs: Math.round(performance.now() - rfStart),
+          message: String(err?.message || "unknown error")
+        },
+        "warn"
+      );
+      state.modeOverride = null;
+      renderTimeline();
+      renderAuth();
+      updatePendingStatusUI();
+      setHint(el.sessionStatus, "勤務資料讀取較慢，已先顯示本機資料，背景重試中。");
+      window.setTimeout(() => {
+        refresh({ showLoading: false, deferSummary: true }).catch(() => {});
+      }, 1800);
+      return;
+    }
     addDebugLog(
       "refresh.error",
       {
