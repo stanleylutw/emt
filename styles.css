@@ -416,7 +416,8 @@ button[aria-disabled="true"] {
 }
 
 .history-export-btn,
-.history-delete-btn {
+.history-delete-btn,
+.history-edit-toggle-btn {
   width: 26px;
   height: 26px;
   display: inline-flex;
@@ -433,6 +434,18 @@ button[aria-disabled="true"] {
   border: 1px solid #cde0ea;
   background: #eaf4fa;
   color: #0b6f8d;
+}
+
+.history-edit-toggle-btn {
+  border: 1px solid #cde0ea;
+  background: #eaf4fa;
+  color: #0b6f8d;
+}
+
+.history-edit-toggle-btn.active {
+  border-color: #9ec8de;
+  background: #d9ecf7;
+  color: #0a5e78;
 }
 
 .history-export-menu {

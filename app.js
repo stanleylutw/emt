@@ -42,6 +42,7 @@ const state = {
   pendingQueueCache: [],
   pendingQueueOwner: null,
   historyRenderCache: {},
+  historyRowEditModeBySession: {},
   historyEditBackup: null,
   editingFromHistory: false,
   actionLocks: {},
@@ -1426,7 +1427,7 @@ const applyPendingMutationsToState = async () => {
 const loadSessionAndRows = async () => {
   if (!state.user) return;
   const { startIso, endIso } = dayBounds();
-  const { data: sessions, error: sesErr } = await dbQuery(
+  let { data: sessions, error: sesErr } = await dbQuery(
     (signal) =>
       supabaseClient
         .from("duty_sessions")
@@ -1442,6 +1443,22 @@ const loadSessionAndRows = async () => {
   if (sesErr) throw sesErr;
 
   state.session = sessions && sessions.length ? sessions[0] : null;
+  if (!state.session) {
+    const { data: activeSessions, error: activeErr } = await dbQuery(
+      (signal) =>
+        supabaseClient
+          .from("duty_sessions")
+          .select("*")
+          .eq("user_id", state.user.id)
+          .eq("status", "active")
+          .order("start_time", { ascending: false })
+          .limit(1)
+          .abortSignal(signal),
+      { label: "讀取跨日進行中勤務", attempts: DB_READ_ATTEMPTS, timeoutMs: DB_READ_TIMEOUT_MS }
+    );
+    if (activeErr) throw activeErr;
+    state.session = activeSessions && activeSessions.length ? activeSessions[0] : null;
+  }
   if (!state.session) {
     state.rows = [];
     saveSnapshotToLocal().catch(() => {});
@@ -2289,7 +2306,15 @@ const renderHistoryList = (sessions, rowsBySession) => {
     card.appendChild(head);
     const actions = document.createElement("div");
     actions.className = "history-session-actions";
+    const rowEditOn = Boolean(state.historyRowEditModeBySession[String(session.id)]);
     actions.innerHTML = `
+      <button
+        type="button"
+        class="history-edit-toggle-btn ${rowEditOn ? "active" : ""}"
+        data-session-id="${session.id}"
+        aria-label="切換明細編輯按鈕"
+        title="編輯明細"
+      >✎</button>
       <button
         type="button"
         class="history-export-btn history-export-toggle"
@@ -2318,7 +2343,7 @@ const renderHistoryList = (sessions, rowsBySession) => {
       line.className = "history-row";
       const next = rows[idx + 1];
       const rowEnd = next ? next.dispatch_time : session.end_time || session.start_time;
-      const canEdit = !isStandby(row);
+      const canEdit = rowEditOn;
       line.innerHTML = `
         <span class="history-row-time">${formatHm(row.dispatch_time)} - ${formatHm(rowEnd)}</span>
         <span class="history-row-text">${escapeHtml(rowSummary(row))}</span>
@@ -2350,11 +2375,6 @@ const openHistoryRowEditor = (sessionId, rowId) => {
   if (!cache || !cache.session || !Array.isArray(cache.rows)) return;
   const row = cache.rows.find((r) => String(r.id) === String(rowId));
   if (!row) return;
-  if (isStandby(row)) {
-    setHint(el.sessionStatus, "待勤紀錄不支援此編輯模式。");
-    return;
-  }
-
   state.historyEditBackup = {
     session: state.session ? { ...state.session } : null,
     rows: Array.isArray(state.rows) ? state.rows.map((x) => ({ ...x })) : [],
@@ -2505,6 +2525,30 @@ const rowEndIso = (row) => {
   const idx = state.rows.findIndex((r) => r.id === row.id);
   const next = idx >= 0 ? state.rows[idx + 1] : null;
   return next ? next.dispatch_time : state.session?.end_time || new Date().toISOString();
+};
+
+const isCrossDayActiveSession = (session) => {
+  if (!session || session.status !== "active" || !session.start_time) return false;
+  const start = new Date(session.start_time);
+  if (Number.isNaN(start.getTime())) return false;
+  const now = new Date();
+  return (
+    start.getFullYear() !== now.getFullYear() ||
+    start.getMonth() !== now.getMonth() ||
+    start.getDate() !== now.getDate()
+  );
+};
+
+const autoCloseCrossDaySessionIfNeeded = async () => {
+  if (!state.user || !state.session || !isCrossDayActiveSession(state.session)) return false;
+  const s = new Date(state.session.start_time);
+  const end = new Date(s.getFullYear(), s.getMonth(), s.getDate(), 23, 59, 0, 0);
+  const payload = { end_time: end.toISOString(), status: "completed" };
+  enqueuePendingItem({ type: "session_update", sessionId: state.session.id, payload });
+  state.session = { ...state.session, ...payload };
+  addDebugLog("session.auto.closed.cross_day", { sessionId: state.session.id, endTime: payload.end_time }, "warn");
+  processPendingQueue().catch(() => {});
+  return true;
 };
 
 const parseHospitalForForm = (row) => {
@@ -2846,6 +2890,7 @@ const refresh = async (opts = {}) => {
   }
   try {
     await loadSessionAndRows();
+    await autoCloseCrossDaySessionIfNeeded();
     state.modeOverride = null;
     renderTimeline();
     renderAuth();
@@ -3818,6 +3863,22 @@ const bind = () => {
       }
     });
     el.historyList.addEventListener("click", (event) => {
+      const editToggleBtn = event.target.closest(".history-edit-toggle-btn");
+      if (editToggleBtn) {
+        const sessionId = Number(editToggleBtn.dataset.sessionId || "");
+        if (!Number.isFinite(sessionId)) return;
+        const key = String(sessionId);
+        state.historyRowEditModeBySession[key] = !Boolean(state.historyRowEditModeBySession[key]);
+        const sessions = Object.values(state.historyRenderCache || {})
+          .map((x) => x?.session)
+          .filter(Boolean);
+        const rowsBySession = new Map();
+        Object.entries(state.historyRenderCache || {}).forEach(([sid, cache]) => {
+          rowsBySession.set(Number(sid), Array.isArray(cache?.rows) ? cache.rows : []);
+        });
+        renderHistoryList(sessions, rowsBySession);
+        return;
+      }
       const editBtn = event.target.closest(".history-row-edit-btn");
       if (editBtn) {
         const sessionId = Number(editBtn.dataset.sessionId || "");
