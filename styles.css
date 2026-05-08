@@ -473,7 +473,7 @@ button[aria-disabled="true"] {
 
 .history-row {
   display: grid;
-  grid-template-columns: auto 1fr;
+  grid-template-columns: auto 1fr auto;
   align-items: baseline;
   gap: 10px;
   font-size: var(--history-font-size);
@@ -493,6 +493,25 @@ button[aria-disabled="true"] {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.history-row-edit-btn,
+.history-row-edit-placeholder {
+  width: 24px;
+  height: 24px;
+}
+
+.history-row-edit-btn {
+  border: 1px solid #cde0ea;
+  background: #eaf4fa;
+  color: #0b6f8d;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  font-size: 13px;
+  line-height: 1;
 }
 
 .icon-btn {

@@ -41,8 +41,9 @@ const state = {
   liveUiLastMinute: null,
   pendingQueueCache: [],
   pendingQueueOwner: null,
-  historyRenderCache: {}
-  ,
+  historyRenderCache: {},
+  historyEditBackup: null,
+  editingFromHistory: false,
   actionLocks: {},
   historyLoadingCount: 0
 };
@@ -2317,9 +2318,15 @@ const renderHistoryList = (sessions, rowsBySession) => {
       line.className = "history-row";
       const next = rows[idx + 1];
       const rowEnd = next ? next.dispatch_time : session.end_time || session.start_time;
+      const canEdit = !isStandby(row);
       line.innerHTML = `
         <span class="history-row-time">${formatHm(row.dispatch_time)} - ${formatHm(rowEnd)}</span>
         <span class="history-row-text">${escapeHtml(rowSummary(row))}</span>
+        ${
+          canEdit
+            ? `<button type="button" class="history-row-edit-btn" data-session-id="${session.id}" data-row-id="${row.id}" aria-label="編輯這筆紀錄" title="編輯">✎</button>`
+            : `<span class="history-row-edit-placeholder"></span>`
+        }
       `;
       card.appendChild(line);
     });
@@ -2336,6 +2343,28 @@ const renderHistoryList = (sessions, rowsBySession) => {
 
     el.historyList.appendChild(card);
   });
+};
+
+const openHistoryRowEditor = (sessionId, rowId) => {
+  const cache = state.historyRenderCache[String(sessionId)];
+  if (!cache || !cache.session || !Array.isArray(cache.rows)) return;
+  const row = cache.rows.find((r) => String(r.id) === String(rowId));
+  if (!row) return;
+  if (isStandby(row)) {
+    setHint(el.sessionStatus, "待勤紀錄不支援此編輯模式。");
+    return;
+  }
+
+  state.historyEditBackup = {
+    session: state.session ? { ...state.session } : null,
+    rows: Array.isArray(state.rows) ? state.rows.map((x) => ({ ...x })) : [],
+    modeOverride: state.modeOverride
+  };
+  state.editingFromHistory = true;
+  state.modeOverride = null;
+  state.session = { ...cache.session };
+  state.rows = cache.rows.map((x) => ({ ...x }));
+  openEventSheetByRowId(rowId);
 };
 
 const deleteHistorySession = async (sessionId, sessionStatus = "") => {
@@ -3021,6 +3050,19 @@ const openEventSheetByRowId = (rowId) => {
   if (sheetBody) sheetBody.scrollTop = 0;
 };
 
+const restoreHistoryEditContext = () => {
+  if (!state.editingFromHistory) return;
+  const backup = state.historyEditBackup || {};
+  state.session = backup.session ? { ...backup.session } : null;
+  state.rows = Array.isArray(backup.rows) ? backup.rows.map((x) => ({ ...x })) : [];
+  state.modeOverride = backup.modeOverride || null;
+  state.historyEditBackup = null;
+  state.editingFromHistory = false;
+  renderTimeline();
+  renderAuth();
+  updatePendingStatusUI();
+};
+
 const closeEventSheet = (force = false) => {
   if (state.busy && !force) return;
   state.editRowId = null;
@@ -3054,6 +3096,7 @@ const closeEventSheet = (force = false) => {
   if (el.eventGuideToggleBtn) el.eventGuideToggleBtn.classList.add("hidden");
   setEventGuideOpen(false);
   el.eventSheet.classList.add("hidden");
+  restoreHistoryEditContext();
 };
 
 const finishEvent = async (e) => {
@@ -3118,6 +3161,7 @@ const saveEventDraft = async () => {
   const rowId = state.editRowId || latestRow()?.id;
   const row = state.rows.find((r) => String(r.id) === String(rowId));
   if (!row || !state.session) return;
+  const editingFromHistory = Boolean(state.editingFromHistory);
 
   const rowIdx = state.rows.findIndex((r) => String(r.id) === String(row.id));
   if (rowIdx < 0) return;
@@ -3221,6 +3265,9 @@ const saveEventDraft = async () => {
   }
 
   closeEventSheet(true);
+  if (editingFromHistory) {
+    loadHistoryRecords().catch(() => {});
+  }
   applyLocalUiAfterMutation();
   setHint(el.sessionStatus, "已本機存檔，背景同步中。");
   processPendingQueue().catch(() => {});
@@ -3771,6 +3818,14 @@ const bind = () => {
       }
     });
     el.historyList.addEventListener("click", (event) => {
+      const editBtn = event.target.closest(".history-row-edit-btn");
+      if (editBtn) {
+        const sessionId = Number(editBtn.dataset.sessionId || "");
+        const rowId = String(editBtn.dataset.rowId || "");
+        if (!Number.isFinite(sessionId) || !rowId) return;
+        openHistoryRowEditor(sessionId, rowId);
+        return;
+      }
       const exportBtn = event.target.closest(".history-export-toggle");
       if (exportBtn) {
         const actions = exportBtn.closest(".history-session-actions");
