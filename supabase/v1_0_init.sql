@@ -37,7 +37,7 @@ create table if not exists public.duty_dispatches (
   patient_count text not null check (patient_count in ('1', '2', '其他')),
   patient_count_custom text,
 
-  hospital text not null check (hospital in ('雙和', '永和耕莘', '慈濟', '新店耕莘', '板醫', '西園', '台大', '其他')),
+  hospital text not null check (hospital in ('雙和', '永和耕莘', '慈濟', '新店耕莘', '板醫', '西園', '台大', '安康耕莘', '其他')),
   hospital_custom text,
 
   chief_complaint text not null,
@@ -199,4 +199,3 @@ using (
 );
 
 commit;
-

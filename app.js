@@ -36,6 +36,9 @@ const state = {
   timelineEditMode: false,
   profileLoadPromise: null,
   refreshPromise: null,
+  refreshRetryTimer: null,
+  refreshRetryDelayMs: null,
+  refreshRetryCount: 0,
   summaryPromise: null,
   liveUiTimer: null,
   liveUiLastMinute: null,
@@ -153,6 +156,7 @@ const DRAFT_WRITE_TIMEOUT_MS = 5000;
 const DRAFT_WRITE_ATTEMPTS = 1;
 const PENDING_SYNC_TIMEOUT_MS = 15000;
 const PENDING_SYNC_ATTEMPTS = 2;
+const REFRESH_TIMEOUT_RETRY_DELAYS_MS = [2000, 5000, 15000, 30000];
 const DEBUG_LOG_KEY = "emt_debug_logs_v1";
 const DEBUG_LOG_MAX = 300;
 const PENDING_SYNC_KEY = "emt_pending_sync_v1";
@@ -423,6 +427,14 @@ const dayBounds = () => {
   return { startIso: s.toISOString(), endIso: e.toISOString() };
 };
 
+const isSessionStartToday = (session) => {
+  if (!session?.start_time) return false;
+  const start = new Date(session.start_time);
+  if (Number.isNaN(start.getTime())) return false;
+  const { startIso, endIso } = dayBounds();
+  return start >= new Date(startIso) && start < new Date(endIso);
+};
+
 const profileStorageKey = () => (state.user ? `emt_profile_${state.user.id}` : "");
 
 const readLocalProfile = () => {
@@ -589,7 +601,9 @@ const writePendingQueue = (items) => {
 };
 
 const updatePendingStatusUI = () => {
-  const count = readPendingQueue().length;
+  const items = readPendingQueue();
+  const count = items.length;
+  const blockedCount = items.filter((x) => x?.blocked).length;
   if (!el.pendingStatus) return;
   if (!count) {
     el.pendingStatus.classList.add("hidden");
@@ -597,7 +611,7 @@ const updatePendingStatusUI = () => {
     return;
   }
   el.pendingStatus.classList.remove("hidden");
-  el.pendingStatus.textContent = `待同步 ${count} 筆`;
+  el.pendingStatus.textContent = blockedCount ? `待同步 ${count} 筆（同步異常 ${blockedCount} 筆）` : `待同步 ${count} 筆`;
 };
 
 const enqueuePendingItem = (item) => {
@@ -614,8 +628,20 @@ const enqueuePendingItem = (item) => {
     const filtered = current.filter((x) => !(x.type === "dispatch_update" && x.rowId === row.rowId));
     writePendingQueue([...filtered, row]);
   } else if (row.type === "session_update" && row.sessionId) {
-    const filtered = current.filter((x) => !(x.type === "session_update" && x.sessionId === row.sessionId));
-    writePendingQueue([...filtered, row]);
+    const existing = current.find((x) => x.type === "session_update" && x.sessionId === row.sessionId);
+    if (existing) {
+      const merged = {
+        ...existing,
+        payload: { ...(existing.payload || {}), ...(row.payload || {}) },
+        tries: 0,
+        blocked: false,
+        lastError: null,
+        lastTriedAt: null
+      };
+      writePendingQueue(current.map((x) => (x.id === existing.id ? merged : x)));
+    } else {
+      writePendingQueue([...current, row]);
+    }
   } else if (row.type === "profile_upsert") {
     const filtered = current.filter((x) => x.type !== "profile_upsert");
     writePendingQueue([...filtered, row]);
@@ -695,9 +721,55 @@ const updatePendingItem = (id, patch) => {
   updatePendingStatusUI();
 };
 
+const DB_DIRECT_HOSPITALS = new Set(["雙和", "永和耕莘", "慈濟", "新店耕莘", "板醫", "西園", "台大"]);
+const FORM_HOSPITALS_AS_OTHER = new Set(["未送", "未選", "安康耕莘"]);
+const DB_DIRECT_CASE_TYPES = new Set(["外科", "內科", "火警"]);
+
+const normalizeHospitalForDb = (hospitalValue, hospitalCustomValue = "") => {
+  const raw = String(hospitalValue ?? "").trim();
+  const custom = String(hospitalCustomValue ?? "").trim();
+
+  if (DB_DIRECT_HOSPITALS.has(raw)) {
+    return { hospital: raw, hospital_custom: null };
+  }
+
+  if (raw === "其他") {
+    return { hospital: "其他", hospital_custom: custom || "其他" };
+  }
+
+  if (FORM_HOSPITALS_AS_OTHER.has(raw)) {
+    return { hospital: "其他", hospital_custom: raw };
+  }
+
+  if (custom) {
+    return { hospital: "其他", hospital_custom: custom };
+  }
+
+  return { hospital: "其他", hospital_custom: "未選" };
+};
+
+const normalizeCaseTypeForDb = (caseTypeValue, caseTypeCustomValue = "") => {
+  const raw = String(caseTypeValue ?? "").trim();
+  const custom = String(caseTypeCustomValue ?? "").trim();
+
+  if (DB_DIRECT_CASE_TYPES.has(raw)) {
+    return { case_type: raw, case_type_custom: null };
+  }
+
+  return { case_type: "其他", case_type_custom: custom || raw || "其他" };
+};
+
 const normalizeDispatchPayloadForDb = (payload) => {
   if (!payload || typeof payload !== "object") return payload;
   const next = { ...payload };
+  const normalizedHospital = normalizeHospitalForDb(next.hospital, next.hospital_custom);
+  next.hospital = normalizedHospital.hospital;
+  next.hospital_custom = normalizedHospital.hospital_custom;
+
+  const normalizedCaseType = normalizeCaseTypeForDb(next.case_type, next.case_type_custom);
+  next.case_type = normalizedCaseType.case_type;
+  next.case_type_custom = normalizedCaseType.case_type_custom;
+
   const rawCount = String(next.patient_count ?? "").trim();
   const rawCustom = String(next.patient_count_custom ?? "").trim();
   const allowed = new Set(["1", "2", "其他"]);
@@ -751,8 +823,14 @@ const getPendingInsertByLocalRowId = (localRowId) =>
 const updatePendingInsertPayloadByLocalRowId = (localRowId, patchPayload) => {
   const item = getPendingInsertByLocalRowId(localRowId);
   if (!item) return false;
-  const nextPayload = { ...(item.payload || {}), ...(patchPayload || {}) };
-  updatePendingItem(item.id, { payload: nextPayload });
+  const nextPayload = normalizeDispatchPayloadForDb({ ...(item.payload || {}), ...(patchPayload || {}) });
+  updatePendingItem(item.id, {
+    payload: nextPayload,
+    blocked: false,
+    tries: 0,
+    lastError: null,
+    lastTriedAt: null
+  });
   return true;
 };
 
@@ -937,7 +1015,7 @@ const dbQuery = async (queryFactory, options = {}) => {
 const processPendingQueue = async () => {
   if (!state.user || state.processingPendingQueue || state.busy) return;
   await loadPendingQueueCache();
-  const items = readPendingQueue();
+  const items = readPendingQueue().filter((x) => !x?.blocked);
   if (!items.length) return;
   state.processingPendingQueue = true;
   addDebugLog("pending.process.start", { count: items.length });
@@ -1030,9 +1108,14 @@ const processPendingQueue = async () => {
           lowerMsg.includes("invalid input syntax") ||
           lowerMsg.includes("value too long");
         if (isPoisonPayload) {
-          removePendingItem(item.id);
+          updatePendingItem(item.id, {
+            blocked: true,
+            tries: Number(item.tries || 0) + 1,
+            lastError: errMsg || "invalid payload",
+            lastTriedAt: new Date().toISOString()
+          });
           addDebugLog(
-            "pending.process.drop_invalid",
+            "pending.process.block_invalid",
             { id: item.id, type: item.type, message: errMsg },
             "warn"
           );
@@ -1350,7 +1433,8 @@ const findExistingDispatchByPayload = async (payload) => {
 };
 
 const insertDispatch = async (payload, retryTextPrefix = "新增勤務明細同步中") => {
-  const existsBefore = await findExistingDispatchByPayload(payload);
+  const normalizedPayload = normalizeDispatchPayloadForDb(payload || {});
+  const existsBefore = await findExistingDispatchByPayload(normalizedPayload);
   if (existsBefore) {
     addDebugLog("dispatch.insert.idempotent.hit", { rowId: existsBefore.id || null });
     return existsBefore;
@@ -1360,7 +1444,7 @@ const insertDispatch = async (payload, retryTextPrefix = "新增勤務明細同�
   let attempts = 0;
   while (attempts < 5) {
     const { error } = await dbQuery(
-      (signal) => supabaseClient.from("duty_dispatches").insert([{ ...payload, seq_no: seq }]).abortSignal(signal),
+      (signal) => supabaseClient.from("duty_dispatches").insert([{ ...normalizedPayload, seq_no: seq }]).abortSignal(signal),
       {
         label: "新增勤務明細",
         attempts: DB_WRITE_ATTEMPTS,
@@ -1371,7 +1455,7 @@ const insertDispatch = async (payload, retryTextPrefix = "新增勤務明細同�
     if (!error) return;
     if (!String(error.message || "").includes("uq_duty_dispatches_session_seq")) throw error;
 
-    const existsAfterConflict = await findExistingDispatchByPayload(payload);
+    const existsAfterConflict = await findExistingDispatchByPayload(normalizedPayload);
     if (existsAfterConflict) {
       addDebugLog("dispatch.insert.idempotent.hit_after_conflict", { rowId: existsAfterConflict.id || null });
       return existsAfterConflict;
@@ -1478,6 +1562,12 @@ const loadSessionAndRows = async () => {
   if (rowErr) throw rowErr;
   state.rows = rows || [];
   await applyPendingMutationsToState();
+  if (state.session && state.session.status !== "active" && !isSessionStartToday(state.session)) {
+    state.session = null;
+    state.rows = [];
+    saveSnapshotToLocal().catch(() => {});
+    return;
+  }
   await autoHealConsecutiveStandbyRows();
   saveSnapshotToLocal().catch(() => {});
 };
@@ -2558,6 +2648,9 @@ const parseHospitalForForm = (row) => {
   if (row.hospital === "其他" && row.hospital_custom === "未選") {
     return "未選";
   }
+  if (row.hospital === "其他" && row.hospital_custom === "安康耕莘") {
+    return "安康耕莘";
+  }
   if (row.hospital === "其他" && (!row.hospital_custom || row.hospital_custom === "未填")) {
     return "其他";
   }
@@ -2669,8 +2762,8 @@ const setEventSheetMode = (mode) => {
 
 const buildEventUpdatePayload = (open) => {
   const hospitalValue = el.hospital.value;
-  const hospital = hospitalValue === "未送" || hospitalValue === "未選" ? "其他" : hospitalValue;
-  const hospitalCustom = hospitalValue === "未送" ? "未送" : hospitalValue === "未選" ? "未選" : null;
+  const { hospital, hospital_custom: hospitalCustom } = normalizeHospitalForDb(hospitalValue);
+  const { case_type: caseType, case_type_custom: caseTypeCustom } = normalizeCaseTypeForDb(el.caseType.value);
   const isNoTransport = hospitalValue === "未送";
   const patientCountValue = isNoTransport ? "其他" : el.patientCount.value;
   const patientCountCustom = isNoTransport ? "0" : null;
@@ -2678,8 +2771,8 @@ const buildEventUpdatePayload = (open) => {
   return {
     vehicle: "其他",
     vehicle_custom: "未填",
-    case_type: el.caseType.value,
-    case_type_custom: null,
+    case_type: caseType,
+    case_type_custom: caseTypeCustom,
     patient_count: patientCountValue,
     patient_count_custom: patientCountCustom,
     hospital,
@@ -2880,6 +2973,20 @@ const isSessionReadTimeoutError = (err) => {
   return msg.includes("讀取勤務主單") && msg.includes("逾時");
 };
 
+const scheduleRefreshRetry = () => {
+  if (state.refreshRetryTimer) return state.refreshRetryDelayMs;
+  const idx = Math.min(state.refreshRetryCount, REFRESH_TIMEOUT_RETRY_DELAYS_MS.length - 1);
+  const delayMs = REFRESH_TIMEOUT_RETRY_DELAYS_MS[idx];
+  state.refreshRetryCount += 1;
+  state.refreshRetryDelayMs = delayMs;
+  state.refreshRetryTimer = window.setTimeout(() => {
+    state.refreshRetryTimer = null;
+    state.refreshRetryDelayMs = null;
+    refresh({ showLoading: false, deferSummary: true }).catch(() => {});
+  }, delayMs);
+  return delayMs;
+};
+
 const refresh = async (opts = {}) => {
   if (state.refreshPromise) {
     addDebugLog("refresh.join");
@@ -2895,7 +3002,16 @@ const refresh = async (opts = {}) => {
   }
   try {
     await loadSessionAndRows();
-    await autoCloseCrossDaySessionIfNeeded();
+    const autoClosedCrossDay = await autoCloseCrossDaySessionIfNeeded();
+    if (autoClosedCrossDay) {
+      await loadSessionAndRows();
+    }
+    state.refreshRetryCount = 0;
+    if (state.refreshRetryTimer) {
+      window.clearTimeout(state.refreshRetryTimer);
+      state.refreshRetryTimer = null;
+    }
+    state.refreshRetryDelayMs = null;
     state.modeOverride = null;
     renderTimeline();
     renderAuth();
@@ -2915,12 +3031,15 @@ const refresh = async (opts = {}) => {
     addDebugLog("refresh.success", { elapsedMs: Math.round(performance.now() - rfStart) });
   } catch (err) {
     if (isSessionReadTimeoutError(err)) {
+      const retryDelayMs =
+        state.refreshRetryCount < REFRESH_TIMEOUT_RETRY_DELAYS_MS.length ? scheduleRefreshRetry() : null;
       // 容錯：勤務主單逾時時保留目前畫面與快取資料，避免整頁變成錯誤狀態。
       addDebugLog(
         "refresh.fallback.keep_state",
         {
           elapsedMs: Math.round(performance.now() - rfStart),
-          message: String(err?.message || "unknown error")
+          message: String(err?.message || "unknown error"),
+          retryDelayMs
         },
         "warn"
       );
@@ -2928,10 +3047,12 @@ const refresh = async (opts = {}) => {
       renderTimeline();
       renderAuth();
       updatePendingStatusUI();
-      setHint(el.sessionStatus, "勤務資料讀取較慢，已先顯示本機資料，背景重試中。");
-      window.setTimeout(() => {
-        refresh({ showLoading: false, deferSummary: true }).catch(() => {});
-      }, 1800);
+      setHint(
+        el.sessionStatus,
+        retryDelayMs
+          ? `勤務資料讀取較慢，已先顯示本機資料，${Math.round(retryDelayMs / 1000)} 秒後背景重試。`
+          : "勤務資料讀取持續逾時，已停止自動重試；請稍後手動重新整理。"
+      );
       return;
     }
     addDebugLog(
