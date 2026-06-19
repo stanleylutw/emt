@@ -121,6 +121,10 @@ const el = {
   ageGroup: document.getElementById("ageGroup"),
   glucose: document.getElementById("glucose"),
   chiefComplaint: document.getElementById("chiefComplaint"),
+  gcsEye: document.getElementById("gcsEye"),
+  gcsVerbal: document.getElementById("gcsVerbal"),
+  gcsMotor: document.getElementById("gcsMotor"),
+  gcsSummary: document.getElementById("gcsSummary"),
   bp: document.getElementById("bp"),
   spo2: document.getElementById("spo2"),
   pulse: document.getElementById("pulse"),
@@ -1346,7 +1350,10 @@ const parseNote = (note) => {
       pulse: "",
       gender: "不明",
       ageGroup: "不明",
-      glucose: ""
+      glucose: "",
+      gcsEye: "",
+      gcsVerbal: "",
+      gcsMotor: ""
     };
   }
   try {
@@ -1359,7 +1366,10 @@ const parseNote = (note) => {
       pulse: String(parsed.pulse || ""),
       gender: parsed.gender || "不明",
       ageGroup: parsed.ageGroup || "不明",
-      glucose: String(parsed.glucose || "")
+      glucose: String(parsed.glucose || ""),
+      gcsEye: String(parsed.gcsEye || ""),
+      gcsVerbal: String(parsed.gcsVerbal || ""),
+      gcsMotor: String(parsed.gcsMotor || "")
     };
   } catch {
     return {
@@ -1370,7 +1380,10 @@ const parseNote = (note) => {
       pulse: "",
       gender: "不明",
       ageGroup: "不明",
-      glucose: ""
+      glucose: "",
+      gcsEye: "",
+      gcsVerbal: "",
+      gcsMotor: ""
     };
   }
 };
@@ -1379,6 +1392,33 @@ const encodeNote = (obj) => JSON.stringify(obj);
 
 const isStandby = (row) => parseNote(row.note).segment === "standby";
 const isOpenEvent = (row) => !isStandby(row) && parseNote(row.note).open === true;
+
+const buildGcsInfo = (note) => {
+  const eye = Number(note?.gcsEye || 0);
+  const verbal = Number(note?.gcsVerbal || 0);
+  const motor = Number(note?.gcsMotor || 0);
+  if (![eye, verbal, motor].every((n) => Number.isInteger(n) && n > 0)) return null;
+  const total = eye + verbal + motor;
+  return {
+    eye,
+    verbal,
+    motor,
+    total,
+    text: `GCS E${eye}V${verbal}M${motor} = ${total}`,
+    isCritical: total < 14
+  };
+};
+
+const updateGcsSummary = () => {
+  if (!el.gcsSummary) return;
+  const info = buildGcsInfo({
+    gcsEye: el.gcsEye?.value || "",
+    gcsVerbal: el.gcsVerbal?.value || "",
+    gcsMotor: el.gcsMotor?.value || ""
+  });
+  el.gcsSummary.textContent = info ? info.text : "未評估";
+  el.gcsSummary.classList.toggle("gcs-alert", Boolean(info?.isCritical));
+};
 
 const actionMode = () => {
   if (state.modeOverride) return state.modeOverride;
@@ -1991,7 +2031,9 @@ const rowSummary = (row) => {
   const memo = note.memo ? `，${note.memo}` : "";
   const complaint = (row.chief_complaint || "").trim();
   const complaintText = complaint ? `，${complaint}` : "";
-  return `${hospital || "未填"} ${count || "?"}人 ${caseText}${complaintText}${memo}`;
+  const gcsInfo = buildGcsInfo(note);
+  const gcsText = gcsInfo ? `，${gcsInfo.text}` : "";
+  return `${hospital || "未填"} ${count || "?"}人 ${caseText}${complaintText}${gcsText}${memo}`;
 };
 
 const displayHospital = (row) =>
@@ -2040,6 +2082,10 @@ const buildSessionExportRows = (session, rows) => {
       gender: note.gender || "不明",
       age_group: note.ageGroup || "不明",
       glucose: note.glucose || "",
+      gcs_eye: note.gcsEye || "",
+      gcs_verbal: note.gcsVerbal || "",
+      gcs_motor: note.gcsMotor || "",
+      gcs_total: buildGcsInfo(note)?.total || "",
       equipment_used_json: JSON.stringify(Array.isArray(row.equipment_used) ? row.equipment_used : []),
       note_json: row.note || ""
     };
@@ -2110,6 +2156,13 @@ const exportHistorySession = (sessionId, fmt) => {
       "bp",
       "spo2",
       "pulse",
+      "gender",
+      "age_group",
+      "glucose",
+      "gcs_eye",
+      "gcs_verbal",
+      "gcs_motor",
+      "gcs_total",
       "equipment_used_json",
       "note_json"
     ];
@@ -2256,6 +2309,9 @@ const normalizeImportedRows = (rawRows) => {
       gender: r.gender || "不明",
       age_group: r.age_group || "不明",
       glucose: r.glucose || "",
+      gcs_eye: r.gcs_eye || "",
+      gcs_verbal: r.gcs_verbal || "",
+      gcs_motor: r.gcs_motor || "",
       equipment_used_json: r.equipment_used_json || "[]",
       note_json: r.note_json || ""
     }))
@@ -2310,7 +2366,10 @@ const importHistoryRows = async (rows) => {
         pulse: row.pulse || "",
         gender: row.gender || "不明",
         ageGroup: row.age_group || "不明",
-        glucose: row.glucose || ""
+        glucose: row.glucose || "",
+        gcsEye: row.gcs_eye || "",
+        gcsVerbal: row.gcs_verbal || "",
+        gcsMotor: row.gcs_motor || ""
       });
     }
     const dispatchPayload = {
@@ -2836,9 +2895,13 @@ const fillEventForm = (row) => {
   if (el.glucose) {
     el.glucose.value = note.glucose || "";
   }
+  if (el.gcsEye) el.gcsEye.value = note.gcsEye || "";
+  if (el.gcsVerbal) el.gcsVerbal.value = note.gcsVerbal || "";
+  if (el.gcsMotor) el.gcsMotor.value = note.gcsMotor || "";
   setEquipmentSelections(row.equipment_used || []);
   el.memo.value = note.memo || "";
   syncPatientCountByHospital();
+  updateGcsSummary();
   updateVitalAlertState();
 };
 
@@ -2915,7 +2978,10 @@ const buildEventUpdatePayload = (open) => {
       pulse: el.pulse ? el.pulse.value.trim() : "",
       gender: el.gender ? el.gender.value : "不明",
       ageGroup: el.ageGroup ? el.ageGroup.value : "不明",
-      glucose: el.glucose ? el.glucose.value.trim() : ""
+      glucose: el.glucose ? el.glucose.value.trim() : "",
+      gcsEye: el.gcsEye ? el.gcsEye.value : "",
+      gcsVerbal: el.gcsVerbal ? el.gcsVerbal.value : "",
+      gcsMotor: el.gcsMotor ? el.gcsMotor.value : ""
     })
   };
 };
@@ -2937,6 +3003,9 @@ const DETAIL_FIELD_KEYS = [
   "gender",
   "ageGroup",
   "glucose",
+  "gcsEye",
+  "gcsVerbal",
+  "gcsMotor",
   "chiefComplaint",
   "bp",
   "spo2",
@@ -3400,6 +3469,9 @@ const closeEventSheet = (force = false) => {
   if (el.gender) el.gender.value = "不明";
   if (el.ageGroup) el.ageGroup.value = "不明";
   if (el.glucose) el.glucose.value = "";
+  if (el.gcsEye) el.gcsEye.value = "";
+  if (el.gcsVerbal) el.gcsVerbal.value = "";
+  if (el.gcsMotor) el.gcsMotor.value = "";
   if (el.eventStartTime) {
     el.eventStartTime.value = "";
     el.eventStartTime.disabled = false;
@@ -3410,6 +3482,7 @@ const closeEventSheet = (force = false) => {
   setEventDetailDisabled(false);
   el.saveDraftBtn.classList.add("hidden");
   el.confirmFinishBtn.classList.remove("hidden");
+  updateGcsSummary();
   updateVitalAlertState();
   if (el.eventGuideToggleBtn) el.eventGuideToggleBtn.classList.add("hidden");
   setEventGuideOpen(false);
@@ -4025,6 +4098,10 @@ const bind = () => {
       updateVitalAlertState();
     });
   }
+  [el.gcsEye, el.gcsVerbal, el.gcsMotor].forEach((select) => {
+    if (!select) return;
+    select.addEventListener("change", updateGcsSummary);
+  });
   if (el.pulse) {
     el.pulse.addEventListener("focus", () => {
       window.setTimeout(() => {

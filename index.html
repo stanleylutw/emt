@@ -305,6 +305,47 @@
               主訴
               <textarea id="chiefComplaint" rows="2" placeholder="可輸入主訴"></textarea>
             </label>
+            <div class="gcs-block" aria-label="昏迷指數 GCS">
+              <div class="gcs-head">
+                <span>危急度判斷：GCS</span>
+                <strong id="gcsSummary">未評估</strong>
+              </div>
+              <div class="tri-row gcs-row">
+                <label>
+                  E 眼睛
+                  <select id="gcsEye">
+                    <option value="" selected>未選</option>
+                    <option value="4">E4 自發</option>
+                    <option value="3">E3 聽聲</option>
+                    <option value="2">E2 痛覺</option>
+                    <option value="1">E1 無反應</option>
+                  </select>
+                </label>
+                <label>
+                  V 語言
+                  <select id="gcsVerbal">
+                    <option value="" selected>未選</option>
+                    <option value="5">V5 清楚</option>
+                    <option value="4">V4 混亂</option>
+                    <option value="3">V3 不適當</option>
+                    <option value="2">V2 呻吟</option>
+                    <option value="1">V1 無反應</option>
+                  </select>
+                </label>
+                <label>
+                  M 動作
+                  <select id="gcsMotor">
+                    <option value="" selected>未選</option>
+                    <option value="6">M6 遵令</option>
+                    <option value="5">M5 定位疼痛</option>
+                    <option value="4">M4 逃避疼痛</option>
+                    <option value="3">M3 異常屈曲</option>
+                    <option value="2">M2 異常伸直</option>
+                    <option value="1">M1 無反應</option>
+                  </select>
+                </label>
+              </div>
+            </div>
             <details class="equipment-collapsible">
               <summary>使用器材（12 項）</summary>
               <fieldset class="equipment-grid">

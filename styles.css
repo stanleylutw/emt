@@ -1198,6 +1198,38 @@ button[aria-disabled="true"] {
   border-color: #efb6bd;
 }
 
+#eventSheet .gcs-block {
+  border: 1px solid #cde0ea;
+  border-radius: 12px;
+  background: #fbfdff;
+  padding: 8px;
+}
+
+#eventSheet .gcs-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+  color: #476377;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+#eventSheet .gcs-head strong {
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: #e8f2f8;
+  color: #125677;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+#eventSheet .gcs-head strong.gcs-alert {
+  background: #fdeff0;
+  color: #a33b45;
+}
+
 #eventSheet .equipment-collapsible {
   border: 1px solid #cde0ea;
   border-radius: 12px;
