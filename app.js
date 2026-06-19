@@ -1790,7 +1790,7 @@ const summarizeSessionRows = (session, rows) => {
 
     // 規則：出勤次數/送醫人數僅在「該事件已結束」後才統計
     const segmentClosed = Boolean(next || session?.end_time);
-    if (!isStandby(cur) && !isOpenEvent(cur) && segmentClosed) {
+    if (!isStandby(cur) && segmentClosed) {
       eventCount += 1;
       transported += transportedUnits(cur);
     }

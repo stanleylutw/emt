@@ -1,23 +1,8 @@
--- EMT v1.3 summary RPC
--- One-call summary aggregation for 今日 / 本月 / 本年 / 總紀錄.
+-- EMT v1.4 summary count fix
+-- Count visible non-standby rows once they are closed by a following row or session end.
+-- This avoids stale note.open=true flags undercounting after history edits/deletes.
 
 begin;
-
-create or replace function public.emt_safe_jsonb(p_text text)
-returns jsonb
-language plpgsql
-immutable
-set search_path = public
-as $$
-begin
-  if p_text is null or btrim(p_text) = '' then
-    return '{}'::jsonb;
-  end if;
-  return p_text::jsonb;
-exception when others then
-  return '{}'::jsonb;
-end;
-$$;
 
 create or replace function public.get_duty_summary(
   p_start timestamptz default null,
@@ -89,7 +74,6 @@ as $$
   from row_totals;
 $$;
 
-grant execute on function public.emt_safe_jsonb(text) to authenticated;
 grant execute on function public.get_duty_summary(timestamptz, timestamptz) to authenticated;
 
 commit;

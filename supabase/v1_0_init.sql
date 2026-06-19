@@ -256,14 +256,12 @@ as $$
       )::bigint as row_ms,
       case
         when coalesce(r.note_json ->> 'segment', 'event') <> 'standby'
-          and coalesce(r.note_json ->> 'open', 'false') <> 'true'
           and (r.next_dispatch_time is not null or s.end_time is not null)
         then 1
         else 0
       end as event_inc,
       case
         when coalesce(r.note_json ->> 'segment', 'event') = 'standby'
-          or coalesce(r.note_json ->> 'open', 'false') = 'true'
           or (r.next_dispatch_time is null and s.end_time is null)
         then 0
         when r.hospital = '其他' and r.hospital_custom = '未送'
