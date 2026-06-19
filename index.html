@@ -18,7 +18,7 @@
             <div>
               <h1 class="brand-title">救護義消協勤日誌</h1>
               <p id="brandMeta" class="brand-meta"></p>
-              <p id="pendingStatus" class="pending-status hidden"></p>
+              <button id="pendingStatus" type="button" class="pending-status hidden" aria-expanded="false" aria-controls="pendingPanel"></button>
             </div>
           </div>
           <button id="profileBtn" type="button" class="avatar-btn" aria-label="開啟個人資料">
@@ -26,6 +26,17 @@
           </button>
         </div>
       </header>
+
+      <section id="pendingPanel" class="pending-panel hidden" aria-live="polite">
+        <div class="pending-panel-head">
+          <div>
+            <strong>同步異常</strong>
+            <p>以下資料尚未成功送到雲端，可重試或清除卡住的項目。</p>
+          </div>
+          <button id="pendingPanelCloseBtn" type="button" class="ghost small">關閉</button>
+        </div>
+        <div id="pendingPanelList" class="pending-panel-list"></div>
+      </section>
 
       <section id="authCard" class="card">
         <h2>登入</h2>

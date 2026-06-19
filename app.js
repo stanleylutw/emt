@@ -40,6 +40,7 @@ const state = {
   refreshRetryDelayMs: null,
   refreshRetryCount: 0,
   summaryPromise: null,
+  summaryPromiseRange: null,
   liveUiTimer: null,
   liveUiLastMinute: null,
   pendingQueueCache: [],
@@ -49,7 +50,8 @@ const state = {
   historyEditBackup: null,
   editingFromHistory: false,
   actionLocks: {},
-  historyLoadingCount: 0
+  historyLoadingCount: 0,
+  pendingPanelOpen: false
 };
 
 const el = {
@@ -57,6 +59,9 @@ const el = {
   profileAvatar: document.getElementById("profileAvatar"),
   brandMeta: document.getElementById("brandMeta"),
   pendingStatus: document.getElementById("pendingStatus"),
+  pendingPanel: document.getElementById("pendingPanel"),
+  pendingPanelList: document.getElementById("pendingPanelList"),
+  pendingPanelCloseBtn: document.getElementById("pendingPanelCloseBtn"),
   authCard: document.getElementById("authCard"),
   workCard: document.getElementById("workCard"),
   actionBar: document.getElementById("actionBar"),
@@ -145,6 +150,7 @@ const el = {
 
 const DEFAULT_AVATAR = "assets/star-of-life-transparent.png";
 const SUMMARY_RANGE_ORDER = ["today", "month", "year", "all"];
+const SUMMARY_RPC_NAME = "get_duty_summary";
 const DB_TIMEOUT_MS = 12000;
 const DB_MAX_ATTEMPTS = 3;
 const DB_RETRY_BASE_MS = 700;
@@ -600,18 +606,77 @@ const writePendingQueue = (items) => {
   persistPendingQueueAsync();
 };
 
+const pendingTypeLabel = (item) => {
+  const type = item?.type || "unknown";
+  const labels = {
+    dispatch_insert: "新增勤務明細",
+    dispatch_update: "更新勤務明細",
+    dispatch_delete: "刪除勤務明細",
+    session_update: "更新勤務主單",
+    profile_upsert: "儲存個人資料"
+  };
+  return labels[type] || type;
+};
+
+const pendingItemMeta = (item) => {
+  const parts = [];
+  if (item?.rowId) parts.push(`row:${item.rowId}`);
+  if (item?.localRowId) parts.push(`local:${item.localRowId}`);
+  if (item?.sessionId || item?.payload?.session_id) parts.push(`session:${item.sessionId || item.payload.session_id}`);
+  if (item?.createdAt) parts.push(`建立:${formatDateTime(item.createdAt)}`);
+  if (item?.lastTriedAt) parts.push(`上次:${formatDateTime(item.lastTriedAt)}`);
+  if (Number(item?.tries || 0) > 0) parts.push(`重試:${Number(item.tries)}`);
+  return parts.join(" / ");
+};
+
+const renderPendingPanel = () => {
+  const blocked = readPendingQueue().filter((x) => x?.blocked);
+  if (el.pendingStatus) {
+    el.pendingStatus.setAttribute("aria-expanded", String(state.pendingPanelOpen && blocked.length > 0));
+  }
+  if (!el.pendingPanel || !el.pendingPanelList) return;
+  if (!blocked.length || !state.pendingPanelOpen) {
+    el.pendingPanel.classList.add("hidden");
+    el.pendingPanelList.innerHTML = "";
+    if (!blocked.length) state.pendingPanelOpen = false;
+    return;
+  }
+
+  el.pendingPanel.classList.remove("hidden");
+  el.pendingPanelList.innerHTML = blocked
+    .map(
+      (item) => `
+        <article class="pending-item">
+          <div class="pending-item-title">
+            <span>${escapeHtml(pendingTypeLabel(item))}</span>
+            <span>${escapeHtml(item.id || "")}</span>
+          </div>
+          <p class="pending-item-meta">${escapeHtml(pendingItemMeta(item) || "無額外資訊")}</p>
+          <p class="pending-error">${escapeHtml(item.lastError || "同步失敗，請重試。")}</p>
+          <div class="pending-item-actions">
+            <button type="button" class="ghost" data-pending-action="retry" data-pending-id="${escapeHtml(item.id || "")}">重試</button>
+            <button type="button" class="ghost" data-pending-action="clear" data-pending-id="${escapeHtml(item.id || "")}">清除</button>
+          </div>
+        </article>
+      `
+    )
+    .join("");
+};
+
 const updatePendingStatusUI = () => {
   const items = readPendingQueue();
   const count = items.length;
   const blockedCount = items.filter((x) => x?.blocked).length;
-  if (!el.pendingStatus) return;
-  if (!count) {
-    el.pendingStatus.classList.add("hidden");
-    el.pendingStatus.textContent = "";
-    return;
+  if (el.pendingStatus) {
+    if (!count) {
+      el.pendingStatus.classList.add("hidden");
+      el.pendingStatus.textContent = "";
+    } else {
+      el.pendingStatus.classList.remove("hidden");
+      el.pendingStatus.textContent = blockedCount ? `待同步 ${count} 筆（同步異常 ${blockedCount} 筆）` : `待同步 ${count} 筆`;
+    }
   }
-  el.pendingStatus.classList.remove("hidden");
-  el.pendingStatus.textContent = blockedCount ? `待同步 ${count} 筆（同步異常 ${blockedCount} 筆）` : `待同步 ${count} 筆`;
+  renderPendingPanel();
 };
 
 const enqueuePendingItem = (item) => {
@@ -719,6 +784,29 @@ const updatePendingItem = (id, patch) => {
   const next = readPendingQueue().map((x) => (x.id === id ? { ...x, ...patch } : x));
   writePendingQueue(next);
   updatePendingStatusUI();
+};
+
+const retryBlockedPendingItem = async (id) => {
+  const item = readPendingQueue().find((x) => x.id === id);
+  if (!item) return;
+  updatePendingItem(id, {
+    blocked: false,
+    lastError: null,
+    lastTriedAt: null
+  });
+  setHint(el.sessionStatus, "已解除同步異常，正在重試。");
+  await processPendingQueue();
+};
+
+const clearBlockedPendingItem = (id) => {
+  const item = readPendingQueue().find((x) => x.id === id);
+  if (!item) return;
+  if (!confirmDeleteByCode("清除此筆同步異常")) {
+    setHint(el.sessionStatus, "確認碼錯誤或已取消，未清除。");
+    return;
+  }
+  removePendingItem(id);
+  setHint(el.sessionStatus, "已清除一筆同步異常。");
 };
 
 const DB_DIRECT_HOSPITALS = new Set(["雙和", "永和耕莘", "慈濟", "新店耕莘", "板醫", "西園", "台大"]);
@@ -1747,6 +1835,31 @@ const buildSessionRowsMap = (rows) => {
   return map;
 };
 
+const fetchSummaryViaRpc = async (summaryRange) => {
+  const bounds = rangeBoundsByType(summaryRange);
+  const { data, error } = await dbQuery(
+    (signal) =>
+      supabaseClient
+        .rpc(SUMMARY_RPC_NAME, {
+          p_start: bounds?.startIso || null,
+          p_end: bounds?.endIso || null
+        })
+        .abortSignal(signal),
+    {
+      label: "讀取摘要統計",
+      attempts: DB_READ_ATTEMPTS,
+      timeoutMs: DB_READ_TIMEOUT_MS
+    }
+  );
+  if (error) throw error;
+  const row = Array.isArray(data) ? data[0] : data;
+  return {
+    dutyMs: Number(row?.duty_ms || 0),
+    eventCount: Number(row?.event_count || 0),
+    transported: Number(row?.transported || 0)
+  };
+};
+
 const renderSummary = async () => {
   if (!state.user) {
     setSummaryValues({});
@@ -1761,7 +1874,7 @@ const renderSummary = async () => {
     return;
   }
 
-  if (state.summaryPromise) {
+  if (state.summaryPromise && state.summaryPromiseRange === state.summaryRange) {
     addDebugLog("summary.join", { range: state.summaryRange });
     return state.summaryPromise;
   }
@@ -1770,6 +1883,18 @@ const renderSummary = async () => {
   const summaryRange = state.summaryRange;
   const runner = async () => {
     const bounds = rangeBoundsByType(summaryRange);
+    try {
+      const values = await fetchSummaryViaRpc(summaryRange);
+      if (state.user?.id !== summaryUserId || state.summaryRange !== summaryRange) {
+        addDebugLog("summary.rpc.stale.discard", { summaryRange });
+        return;
+      }
+      setSummaryValues(values);
+      return;
+    } catch (rpcErr) {
+      addDebugLog("summary.rpc.fallback", { message: String(rpcErr?.message || "") }, "warn");
+    }
+
     let query = supabaseClient
       .from("duty_sessions")
       .select("id, end_time, status, start_time")
@@ -1802,7 +1927,7 @@ const renderSummary = async () => {
       (signal) =>
         supabaseClient
           .from("duty_dispatches")
-          .select("session_id, dispatch_time, patient_count, patient_count_custom, note")
+          .select("session_id, dispatch_time, hospital, hospital_custom, patient_count, patient_count_custom, note")
           .in("session_id", ids)
           .abortSignal(signal),
       { label: "讀取摘要明細", attempts: 2 }
@@ -1835,11 +1960,13 @@ const renderSummary = async () => {
 
   const task = runner();
   state.summaryPromise = task;
+  state.summaryPromiseRange = summaryRange;
   try {
     return await task;
   } finally {
     if (state.summaryPromise === task) {
       state.summaryPromise = null;
+      state.summaryPromiseRange = null;
     }
   }
 };
@@ -3950,6 +4077,35 @@ const bind = () => {
   el.profileAvatarFile.addEventListener("change", onProfileAvatarFileChange);
   if (el.copyDebugLogBtn) el.copyDebugLogBtn.addEventListener("click", copyDebugLogs);
   if (el.clearDebugLogBtn) el.clearDebugLogBtn.addEventListener("click", clearDebugLogs);
+  if (el.pendingStatus) {
+    el.pendingStatus.addEventListener("click", () => {
+      state.pendingPanelOpen = !state.pendingPanelOpen;
+      renderPendingPanel();
+    });
+  }
+  if (el.pendingPanelCloseBtn) {
+    el.pendingPanelCloseBtn.addEventListener("click", () => {
+      state.pendingPanelOpen = false;
+      renderPendingPanel();
+    });
+  }
+  if (el.pendingPanelList) {
+    el.pendingPanelList.addEventListener("click", (event) => {
+      const btn = event.target.closest("[data-pending-action]");
+      if (!btn) return;
+      const id = btn.dataset.pendingId || "";
+      if (!id) return;
+      if (btn.dataset.pendingAction === "retry") {
+        retryBlockedPendingItem(id).catch((err) => {
+          setHint(el.sessionStatus, `重試失敗：${String(err?.message || err || "")}`);
+        });
+        return;
+      }
+      if (btn.dataset.pendingAction === "clear") {
+        clearBlockedPendingItem(id);
+      }
+    });
+  }
   el.summaryTabs.addEventListener("click", async (event) => {
     const btn = event.target.closest(".tab");
     if (!btn) return;

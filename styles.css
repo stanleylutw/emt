@@ -93,9 +93,97 @@ body {
 }
 
 .pending-status {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
   margin: 2px 0 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
   font-size: 12px;
   color: #a05f00;
+  cursor: pointer;
+  text-align: left;
+}
+
+.pending-status:hover {
+  text-decoration: underline;
+}
+
+.pending-panel {
+  background: #fff8ed;
+  border: 1px solid #f1c987;
+  border-radius: 14px;
+  padding: 12px;
+  margin: -2px 0 10px;
+  color: #25465a;
+}
+
+.pending-panel-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.pending-panel-head strong {
+  display: block;
+  font-size: 18px;
+  color: #9b5d00;
+}
+
+.pending-panel-head p {
+  margin: 3px 0 0;
+  font-size: 13px;
+  line-height: 1.35;
+  color: #6e7f8b;
+}
+
+.pending-panel-list {
+  display: grid;
+  gap: 8px;
+}
+
+.pending-item {
+  border: 1px solid rgba(160, 95, 0, 0.22);
+  border-radius: 12px;
+  padding: 10px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.pending-item-title {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-weight: 800;
+}
+
+.pending-item-meta,
+.pending-error {
+  margin: 4px 0 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: #657989;
+  word-break: break-word;
+}
+
+.pending-error {
+  color: #9b4d00;
+}
+
+.pending-item-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.pending-item-actions .ghost {
+  flex: 1;
+  min-height: 36px;
+  padding: 8px 10px;
+  font-size: 14px;
 }
 
 .avatar-btn {
