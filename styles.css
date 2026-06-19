@@ -1163,6 +1163,10 @@ button[aria-disabled="true"] {
   min-height: 64px;
 }
 
+#eventSheet #chiefComplaint {
+  margin-bottom: 4px;
+}
+
 #eventSheet .small {
   padding: 8px 10px;
   min-width: 64px;
@@ -1203,6 +1207,7 @@ button[aria-disabled="true"] {
   border-radius: 12px;
   background: #fbfdff;
   padding: 8px;
+  margin: 4px 0 8px;
 }
 
 #eventSheet .gcs-head {
