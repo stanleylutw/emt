@@ -74,8 +74,7 @@
             <button type="button" class="tab" data-range="month">本月</button>
             <button type="button" class="tab" data-range="quarter">本季</button>
             <button type="button" class="tab" data-range="year">本年</button>
-            <button type="button" class="tab" data-range="all">總紀錄</button>
-            <button id="historyToggleBtn" type="button" class="tab history-tab" aria-expanded="false" aria-controls="historyPanel" aria-label="切換歷史紀錄">
+            <button id="historyToggleBtn" type="button" class="tab history-tab" data-range="all" aria-expanded="false" aria-controls="historyPanel" aria-label="切換歷史紀錄與總紀錄">
               <svg class="history-tab-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                 <rect x="3" y="4" width="18" height="17" rx="2" stroke="currentColor" stroke-width="2"></rect>
                 <path d="M8 2V6" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path>
@@ -85,9 +84,9 @@
             </button>
           </div>
           <div class="stats">
-            <article><p>協勤時數</p><strong id="sumDutyHours">00:00</strong></article>
-            <article><p>出勤次數</p><strong id="sumEventCount">0</strong></article>
-            <article><p>送醫人數</p><strong id="sumTransported">0</strong></article>
+            <article><p id="sumDutyHoursLabel">協勤時數</p><strong id="sumDutyHours">00:00</strong></article>
+            <article><p id="sumEventCountLabel">出勤次數</p><strong id="sumEventCount">0</strong></article>
+            <article><p id="sumTransportedLabel">送醫人數</p><strong id="sumTransported">0</strong></article>
           </div>
           <div id="summaryHistory" class="summary-history">
             <div id="historyPanel" class="history-panel hidden">
