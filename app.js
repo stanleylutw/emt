@@ -829,7 +829,7 @@ const clearBlockedPendingItem = (id) => {
 };
 
 const DB_DIRECT_HOSPITALS = new Set(["雙和", "永和耕莘", "慈濟", "新店耕莘", "板醫", "西園", "台大"]);
-const FORM_HOSPITALS_AS_OTHER = new Set(["未送", "未選", "安康耕莘"]);
+const FORM_HOSPITALS_AS_OTHER = new Set(["未送", "未選", "安康耕莘", "亞東"]);
 const DB_DIRECT_CASE_TYPES = new Set(["外科", "內科", "火警"]);
 
 const normalizeHospitalForDb = (hospitalValue, hospitalCustomValue = "") => {
@@ -2853,10 +2853,13 @@ const parseHospitalForForm = (row) => {
   if (row.hospital === "其他" && row.hospital_custom === "安康耕莘") {
     return "安康耕莘";
   }
+  if (row.hospital === "其他" && row.hospital_custom === "亞東") {
+    return "亞東";
+  }
   if (row.hospital === "其他" && (!row.hospital_custom || row.hospital_custom === "未填")) {
     return "其他";
   }
-  const allowed = ["未選", "雙和", "永和耕莘", "慈濟", "新店耕莘", "板醫", "西園", "台大", "安康耕莘", "其他", "未送"];
+  const allowed = ["未選", "雙和", "永和耕莘", "慈濟", "新店耕莘", "板醫", "西園", "台大", "安康耕莘", "亞東", "其他", "未送"];
   if (allowed.includes(row.hospital)) {
     return row.hospital;
   }
