@@ -153,7 +153,7 @@ const el = {
 };
 
 const DEFAULT_AVATAR = "assets/star-of-life-transparent.png";
-const SUMMARY_RANGE_ORDER = ["today", "month", "year", "all"];
+const SUMMARY_RANGE_ORDER = ["today", "month", "quarter", "year", "all"];
 const SUMMARY_RPC_NAME = "get_duty_summary";
 const DB_TIMEOUT_MS = 12000;
 const DB_MAX_ATTEMPTS = 3;
@@ -1863,6 +1863,12 @@ const rangeBoundsByType = (type) => {
   if (type === "month") {
     const s = new Date(now.getFullYear(), now.getMonth(), 1);
     const e = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+    return { startIso: s.toISOString(), endIso: e.toISOString() };
+  }
+  if (type === "quarter") {
+    const q = Math.floor(now.getMonth() / 3);
+    const s = new Date(now.getFullYear(), q * 3, 1);
+    const e = new Date(now.getFullYear(), q * 3 + 3, 1);
     return { startIso: s.toISOString(), endIso: e.toISOString() };
   }
   if (type === "year") {
