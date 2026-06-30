@@ -1,10 +1,19 @@
 # EMT協勤 功能與 UI 維護計畫
 
+v1.6
+
+Last updated: 2026-06-30 00:00:00 [Claude]
+
 本文件是 EMT協勤 專案的功能、介面、資料流與修改準則。之後新增或修改任何功能前，先對照本文件，讓 UI、資料同步、離線邏輯與 Supabase schema 保持一致。
 
-最後更新：2026-06-18
 目前主要分支：`v1.5_IndexedDB`
 主要檔案：`index.html`、`app.js`、`styles.css`、`supabase/*.sql`
+
+## Revision History
+
+| Version | Date Time | Summary | Who | Branch |
+|---|---|---|---|---|
+| v1.6 | 2026-06-30 00:00:00 | Fix pending queue race condition, purge stale queue items on delete, clear history metadata on logout | Codex | fix_pending_queue_bugs |
 
 ## 1. 專案目標
 

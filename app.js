@@ -610,6 +610,21 @@ const writePendingQueue = (items) => {
   persistPendingQueueAsync();
 };
 
+const purgePendingQueueBySessionIds = (sessionIds) => {
+  const idSet = new Set((Array.isArray(sessionIds) ? sessionIds : []).map((id) => String(id)).filter(Boolean));
+  if (!idSet.size) return;
+  const items = readPendingQueue();
+  const kept = items.filter((item) => {
+    const sid = item?.sessionId || item?.payload?.session_id;
+    return !(sid && idSet.has(String(sid)));
+  });
+  if (kept.length !== items.length) {
+    writePendingQueue(kept);
+    updatePendingStatusUI();
+    addDebugLog("pending.purge_by_session", { removed: items.length - kept.length, sessions: idSet.size });
+  }
+};
+
 const pendingTypeLabel = (item) => {
   const type = item?.type || "unknown";
   const labels = {
@@ -1106,13 +1121,13 @@ const dbQuery = async (queryFactory, options = {}) => {
 
 const processPendingQueue = async () => {
   if (!state.user || state.processingPendingQueue || state.busy) return;
-  await loadPendingQueueCache();
-  const items = readPendingQueue().filter((x) => !x?.blocked);
-  if (!items.length) return;
   state.processingPendingQueue = true;
-  addDebugLog("pending.process.start", { count: items.length });
-  let hadSuccess = false;
   try {
+    await loadPendingQueueCache();
+    const items = readPendingQueue().filter((x) => !x?.blocked);
+    if (!items.length) return;
+    addDebugLog("pending.process.start", { count: items.length });
+    let hadSuccess = false;
     for (const item of items) {
       try {
         if (item.type === "dispatch_update") {
@@ -2690,6 +2705,7 @@ const deleteHistorySession = async (sessionId, sessionStatus = "") => {
     );
     if (delSessionErr) throw delSessionErr;
 
+    purgePendingQueueBySessionIds([sessionId]);
     await refresh({ showLoading: false, deferSummary: true });
     await loadAvailableHistoryDates();
     await loadHistoryRecords();
@@ -3763,6 +3779,7 @@ const deleteTodayRecords = async () => {
     );
     if (delSessionErr) throw delSessionErr;
 
+    purgePendingQueueBySessionIds(ids);
     closeEventSheet(true);
     state.session = null;
     state.rows = [];
@@ -3790,6 +3807,9 @@ const clearSignedOutState = () => {
   state.session = null;
   state.rows = [];
   state.pendingQueueCache = [];
+  state.availableHistoryDates = [];
+  state.availableHistoryMonths = [];
+  state.historyRenderCache = {};
   state.profile = { displayName: "", unit: "", title: "", phone: "", avatarDataUrl: "" };
   state.timelineEditMode = false;
   closeEventSheet(true);
