@@ -45,6 +45,7 @@ const state = {
   liveUiLastMinute: null,
   pendingQueueCache: [],
   pendingQueueOwner: null,
+  pendingQueueLoaded: false,
   historyRenderCache: {},
   historyRowEditModeBySession: {},
   historyEditBackup: null,
@@ -272,11 +273,13 @@ const loadPendingQueueCache = async () => {
   if (state.pendingQueueOwner !== owner) {
     state.pendingQueueCache = [];
     state.pendingQueueOwner = owner;
+    state.pendingQueueLoaded = false;
   }
-  if (!state.pendingQueueCache || !state.pendingQueueCache.length) {
+  if (!state.pendingQueueLoaded) {
     const cached = await localDbGet(pendingQueueKey());
     if (Array.isArray(cached)) {
       state.pendingQueueCache = cached;
+      state.pendingQueueLoaded = true;
       addDebugLog("pending.cache.loaded", { count: cached.length });
       return;
     }
@@ -287,6 +290,7 @@ const loadPendingQueueCache = async () => {
         const legacyParsed = JSON.parse(legacyRaw);
         if (Array.isArray(legacyParsed) && legacyParsed.length) {
           state.pendingQueueCache = legacyParsed.slice(-PENDING_SYNC_MAX);
+          state.pendingQueueLoaded = true;
           persistPendingQueueAsync();
           localStorage.removeItem(PENDING_SYNC_KEY);
           addDebugLog("pending.cache.migrated", { count: state.pendingQueueCache.length });
@@ -296,6 +300,7 @@ const loadPendingQueueCache = async () => {
     } catch {
       // ignore migration failure
     }
+    state.pendingQueueLoaded = true;
   }
   state.pendingQueueCache = Array.isArray(state.pendingQueueCache) ? state.pendingQueueCache : [];
 };
@@ -3810,6 +3815,7 @@ const clearSignedOutState = () => {
   state.session = null;
   state.rows = [];
   state.pendingQueueCache = [];
+  state.pendingQueueLoaded = false;
   state.availableHistoryDates = [];
   state.availableHistoryMonths = [];
   state.historyRenderCache = {};

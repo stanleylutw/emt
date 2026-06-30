@@ -49,6 +49,7 @@ For existing production databases, apply only migrations that have not yet been 
 
 - `APP_VERSION` and `APP_RELEASE_STAMP` live in `app.js`.
 - `APP_RELEASE_STAMP` should be regenerated for each release/build time.
+- When bumping `APP_RELEASE_STAMP` in `app.js`, also update the matching `?v=` query string on the `app.js` and `styles.css` tags in `index.html` to the same value — this is what forces browsers/GitHub Pages cache to fetch the new build.
 - The deployed site is served by GitHub Pages from this repository/branch configuration.
 - After changing Supabase constraints, apply the matching SQL to production before relying on the frontend change.
 
