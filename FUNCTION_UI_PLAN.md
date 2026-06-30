@@ -1,6 +1,6 @@
 # EMT協勤 功能與 UI 維護計畫
 
-v1.7
+v1.8
 
 Last updated: 2026-06-30 00:00:00 [Claude]
 
@@ -15,6 +15,7 @@ Last updated: 2026-06-30 00:00:00 [Claude]
 |---|---|---|---|---|
 | v1.6 | 2026-06-30 00:00:00 | Fix pending queue race condition, purge stale queue items on delete, clear history metadata on logout | Codex | fix_pending_queue_bugs |
 | v1.7 | 2026-06-30 00:00:00 | Add 亞東 hospital option (其他 fallback pattern, same as 安康耕莘) | Claude | add_hospital_yadong |
+| v1.8 | 2026-06-30 00:00:00 | Add 本季 summary tab (quarter range, current year only) | Claude | add_summary_quarter_tab |
 
 ## 1. 專案目標
 
@@ -264,9 +265,18 @@ Supabase `duty_dispatches` 有 check constraint。前端表單值不可直接假
 
 - 今日。
 - 本月。
+- 本季。
 - 本年。
 - 總紀錄。
 - 歷史紀錄按鈕。
+
+### 季度定義
+
+- Q1：1-3 月。
+- Q2：4-6 月。
+- Q3：7-9 月。
+- Q4：10-12 月。
+- 「本季」只計算當年當季，不跨年份（例如 2026-06-30 屬於 Q2，範圍為 2026-04-01 00:00 ~ 2026-07-01 00:00）。
 
 ### 統計項目
 
