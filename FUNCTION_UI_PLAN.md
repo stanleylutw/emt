@@ -1,6 +1,6 @@
 # EMT協勤 功能與 UI 維護計畫
 
-v1.9
+v2.0
 
 Last updated: 2026-06-30 00:00:00 [Claude]
 
@@ -17,6 +17,7 @@ Last updated: 2026-06-30 00:00:00 [Claude]
 | v1.7 | 2026-06-30 00:00:00 | Add 亞東 hospital option (其他 fallback pattern, same as 安康耕莘) | Claude | add_hospital_yadong |
 | v1.8 | 2026-06-30 00:00:00 | Add 本季 summary tab (quarter range, current year only) | Claude | add_summary_quarter_tab |
 | v1.9 | 2026-06-30 00:00:00 | Add release-stamp cache-busting for app.js/styles.css; fix redundant IndexedDB read in loadPendingQueueCache | Claude | perf_cache_bust_and_pending_queue_read |
+| v2.0 | 2026-06-30 00:00:00 | Merge 總紀錄 tab into 📅 calendar button (click switches summaryRange to all + toggles history panel); add 總 prefix to summary labels in all-time mode | Claude | merge_total_and_calendar_button |
 
 ## 1. 專案目標
 
@@ -269,8 +270,7 @@ Supabase `duty_dispatches` 有 check constraint。前端表單值不可直接假
 - 本月。
 - 本季。
 - 本年。
-- 總紀錄。
-- 歷史紀錄按鈕。
+- 歷史紀錄按鈕（📅，兼總紀錄）：點擊同時切換統計區間為「全部」並展開/收合歷史紀錄面板，不再有獨立的「總紀錄」文字 tab。
 
 ### 季度定義
 
@@ -285,6 +285,7 @@ Supabase `duty_dispatches` 有 check constraint。前端表單值不可直接假
 - 協勤時數。
 - 出勤次數。
 - 送醫人數。
+- 當統計區間為「全部」（`summaryRange === "all"`）時，三個標籤動態加上「總」字首：總協勤時數、總出勤次數、總送醫人數；其餘區間維持原標籤文字。
 
 ### 資料規則
 

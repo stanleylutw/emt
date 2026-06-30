@@ -70,8 +70,11 @@ const el = {
   logoutBtn: document.getElementById("logoutBtn"),
 
   sumDutyHours: document.getElementById("sumDutyHours"),
+  sumDutyHoursLabel: document.getElementById("sumDutyHoursLabel"),
   sumEventCount: document.getElementById("sumEventCount"),
+  sumEventCountLabel: document.getElementById("sumEventCountLabel"),
   sumTransported: document.getElementById("sumTransported"),
+  sumTransportedLabel: document.getElementById("sumTransportedLabel"),
   summaryCard: document.getElementById("summaryCard"),
   summaryTabs: document.getElementById("summaryTabs"),
   summaryHistory: document.getElementById("summaryHistory"),
@@ -1830,6 +1833,10 @@ const setSummaryValues = ({ dutyMs = 0, eventCount = 0, transported = 0 }) => {
   el.sumDutyHours.textContent = `${hh}:${mm}`;
   el.sumEventCount.textContent = String(eventCount);
   el.sumTransported.textContent = String(transported);
+  const isAllRange = state.summaryRange === "all";
+  if (el.sumDutyHoursLabel) el.sumDutyHoursLabel.textContent = isAllRange ? "總協勤時數" : "協勤時數";
+  if (el.sumEventCountLabel) el.sumEventCountLabel.textContent = isAllRange ? "總出勤次數" : "出勤次數";
+  if (el.sumTransportedLabel) el.sumTransportedLabel.textContent = isAllRange ? "總送醫人數" : "送醫人數";
 };
 
 const summarizeSessionRows = (session, rows) => {
